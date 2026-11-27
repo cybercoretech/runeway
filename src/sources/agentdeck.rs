@@ -39,6 +39,17 @@ impl SessionLister for Unavailable {
     }
 }
 
+/// Lists nothing and never fails: stands in for agent-deck when the owner
+/// turned it off, or when it is not installed and discovery finds agents.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoSessions;
+
+impl SessionLister for NoSessions {
+    fn list(&self) -> Result<Vec<Session>> {
+        Ok(Vec::new())
+    }
+}
+
 /// Lists sessions by running `<program> ls --json` (no shell).
 #[derive(Debug, Clone)]
 pub struct AgentDeck {

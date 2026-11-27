@@ -17,7 +17,7 @@ use runeway::{
     collector::{Collector, check},
     config::Config,
     sources::{
-        agentdeck::{AgentDeck, SessionLister, Unavailable},
+        agentdeck::{AgentDeck, NoSessions, SessionLister, Unavailable},
         discover::{Combined, Discovery},
     },
     status,
@@ -64,6 +64,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
     if let Command::Check = command {
         return Ok(run_check(&config, deck.as_ref()));
     }
+    // Turned off, or simply not installed while discovery finds agents:
+    // not an error worth a notice. `check` above still reports it.
+    let quiet = cli.no_agent_deck || (config.agent_deck.is_none() && !cli.no_discover);
+    let deck: Box<dyn SessionLister + Send> = if quiet { Box::new(NoSessions) } else { deck };
     let lister: Box<dyn SessionLister + Send> = if cli.no_discover {
         deck
     } else {
