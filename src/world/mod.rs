@@ -2,9 +2,11 @@
 //! Pure and deterministic: no clocks, no randomness, no terminal code.
 
 pub mod halfblock;
+pub mod lane;
 pub mod mapping;
 pub mod palette;
 pub mod pixels;
+pub mod rng;
 pub mod runner;
 pub mod sprites;
 

@@ -9,6 +9,9 @@ pub fn state_for(kind: ActivityKind, status: &SessionStatus) -> RunnerState {
     match status {
         SessionStatus::Error | SessionStatus::Stopped => return RunnerState::LostSignal,
         SessionStatus::Waiting => return RunnerState::AtGate,
+        SessionStatus::Idle | SessionStatus::Ready if kind != ActivityKind::Finished => {
+            return RunnerState::Idle;
+        }
         _ => {}
     }
     match kind {
@@ -93,6 +96,17 @@ mod tests {
     #[test]
     fn idle_sits() {
         assert_eq!(running(ActivityKind::Idle), RunnerState::Idle);
+    }
+
+    #[test]
+    fn idle_or_ready_agent_sits_unless_finished() {
+        for status in [SessionStatus::Idle, SessionStatus::Ready] {
+            assert_eq!(state_for(ActivityKind::Editing, &status), RunnerState::Idle);
+            assert_eq!(
+                state_for(ActivityKind::Finished, &status),
+                RunnerState::Finished
+            );
+        }
     }
 
     #[test]
