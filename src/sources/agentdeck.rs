@@ -23,6 +23,16 @@ pub trait SessionLister {
     fn list(&self) -> Result<Vec<Session>>;
 }
 
+/// Stands in when agent-deck cannot be used; every listing fails with the reason.
+#[derive(Debug, Clone)]
+pub struct Unavailable(pub String);
+
+impl SessionLister for Unavailable {
+    fn list(&self) -> Result<Vec<Session>> {
+        Err(Error::AgentDeck(self.0.clone()))
+    }
+}
+
 /// Lists sessions by running `<program> ls --json` (no shell).
 #[derive(Debug, Clone)]
 pub struct AgentDeck {
@@ -160,36 +170,30 @@ mod tests {
         assert!(message.contains("no-such-agent-deck"), "{message}");
     }
 
+    /// A committed, executable fixture script. Tests never write a script and
+    /// run it straight away: on Linux a parallel test's fork can briefly hold
+    /// the just-written file open, and running it then fails ("Text file busy").
+    fn fixture_program(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/bin")
+            .join(name)
+    }
+
     #[cfg(unix)]
     #[test]
     fn runs_program_and_parses_its_output() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().expect("tempdir");
-        let program = dir.path().join("fake-agent-deck");
-        let json = dir.path().join("ls.json");
-        std::fs::write(&json, fixture()).expect("json");
-        std::fs::write(
-            &program,
-            format!(
-                "#!/bin/sh\n[ \"$1 $2\" = \"ls --json\" ] || exit 9\ncat '{}'\n",
-                json.display()
-            ),
-        )
-        .expect("script");
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        let sessions = AgentDeck::new(program).list().expect("list");
+        let sessions = AgentDeck::new(fixture_program("fake-agent-deck"))
+            .list()
+            .expect("list");
         assert_eq!(sessions.len(), 3);
     }
 
     #[cfg(unix)]
     #[test]
     fn nonzero_exit_is_an_error() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().expect("tempdir");
-        let program = dir.path().join("broken");
-        std::fs::write(&program, "#!/bin/sh\necho oops >&2\nexit 3\n").expect("script");
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        let err = AgentDeck::new(program).list().expect_err("fails");
+        let err = AgentDeck::new(fixture_program("broken-agent-deck"))
+            .list()
+            .expect_err("fails");
         assert!(err.to_string().contains("exit"), "{err}");
     }
 }

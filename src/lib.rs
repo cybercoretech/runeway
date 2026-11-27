@@ -5,5 +5,6 @@ pub mod config;
 pub mod error;
 pub mod model;
 pub mod sources;
+pub mod status;
 
 pub use error::{Error, Result};

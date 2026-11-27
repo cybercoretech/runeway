@@ -1,0 +1,4 @@
+#!/bin/sh
+# Test stand-in for an agent-deck that fails.
+echo oops >&2
+exit 3

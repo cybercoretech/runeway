@@ -1,0 +1,4 @@
+#!/bin/sh
+# Test stand-in for agent-deck: answers `ls --json` with the fixture list.
+[ "$1 $2" = "ls --json" ] || exit 9
+cat "$(dirname "$0")/../agentdeck/ls.json"
