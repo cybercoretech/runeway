@@ -3,6 +3,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use serde_json::Value;
@@ -20,21 +21,27 @@ pub fn slug_for(cwd: &Path) -> String {
 
 /// The most recently modified `.jsonl` transcript for `cwd`, if any.
 pub fn find_transcript(projects_dir: &Path, cwd: &Path) -> Option<PathBuf> {
-    newest_jsonl(&projects_dir.join(slug_for(cwd)))
+    candidates(projects_dir, cwd)
+        .into_iter()
+        .next()
+        .map(|(_, path)| path)
 }
 
-pub(crate) fn newest_jsonl(dir: &Path) -> Option<PathBuf> {
-    std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
+/// Every `.jsonl` transcript for `cwd`, newest first.
+pub fn candidates(projects_dir: &Path, cwd: &Path) -> Vec<(SystemTime, PathBuf)> {
+    let mut found: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(projects_dir.join(slug_for(cwd)))
+        .into_iter()
+        .flatten()
+        .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
         .filter_map(|path| {
             let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
             Some((modified, path))
         })
-        .max_by_key(|(modified, _)| *modified)
-        .map(|(_, path)| path)
+        .collect();
+    found.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    found
 }
 
 /// Turns Claude transcript lines into events. Keeps just enough state to

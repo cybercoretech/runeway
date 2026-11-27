@@ -1,7 +1,10 @@
 //! Where Runeway looks for its sources. No paths are hard-coded in the
 //! library: the binary builds a `Config` from `$HOME` and command-line flags.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// Resolved source locations and options.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +19,9 @@ pub struct Config {
     pub claude_context_window: u64,
     /// How much of an existing transcript to read on start, in bytes.
     pub backfill_bytes: u64,
+    /// How long a followed transcript must stay quiet before a lane switches
+    /// to a newer one (Claude starts a new file after `/clear`).
+    pub switch_after: Duration,
 }
 
 impl Config {
@@ -28,6 +34,7 @@ impl Config {
             agent_deck: None,
             claude_context_window: 200_000,
             backfill_bytes: 256 * 1024,
+            switch_after: Duration::from_secs(30),
         }
     }
 }

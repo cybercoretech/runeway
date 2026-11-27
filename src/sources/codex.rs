@@ -1,9 +1,11 @@
 //! Codex rollouts: `<sessions>/YYYY/MM/DD/rollout-*.jsonl`.
 
 use std::{
+    collections::HashMap,
     fs::File,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use serde_json::Value;
@@ -19,23 +21,60 @@ const EXEC: &str = "exec";
 /// The most recently modified rollout whose `session_meta.cwd` is `cwd`,
 /// searching only the most recent day folders.
 pub fn find_transcript(sessions_dir: &Path, cwd: &Path) -> Option<PathBuf> {
-    recent_day_dirs(sessions_dir)
+    RolloutIndex::default()
+        .candidates(sessions_dir, cwd)
         .into_iter()
-        .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension().is_some_and(|ext| ext == "jsonl")
-                && path
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with("rollout-"))
-        })
-        .filter(|path| rollout_cwd(path).as_deref() == Some(cwd))
-        .filter_map(|path| {
-            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
-            Some((modified, path))
-        })
-        .max_by_key(|(modified, _)| *modified)
+        .next()
         .map(|(_, path)| path)
+}
+
+/// Remembers each rollout's working directory, so the first line of a
+/// rollout (which also holds Codex's long base instructions) is read once,
+/// not on every poll.
+#[derive(Debug, Default)]
+pub struct RolloutIndex {
+    cwd_by_path: HashMap<PathBuf, Option<PathBuf>>,
+}
+
+impl RolloutIndex {
+    /// Rollouts in the recent day folders whose working directory is `cwd`,
+    /// newest first.
+    pub fn candidates(&mut self, sessions_dir: &Path, cwd: &Path) -> Vec<(SystemTime, PathBuf)> {
+        let mut found: Vec<(SystemTime, PathBuf)> = recent_day_dirs(sessions_dir)
+            .into_iter()
+            .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension().is_some_and(|ext| ext == "jsonl")
+                    && path
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with("rollout-"))
+            })
+            .filter(|path| {
+                self.cwd_by_path
+                    .entry(path.clone())
+                    .or_insert_with(|| rollout_cwd(path))
+                    .as_deref()
+                    == Some(cwd)
+            })
+            .filter_map(|path| {
+                let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+                Some((modified, path))
+            })
+            .collect();
+        found.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        found
+    }
+
+    /// How many rollouts have been indexed.
+    pub fn len(&self) -> usize {
+        self.cwd_by_path.len()
+    }
+
+    /// True when nothing has been indexed yet.
+    pub fn is_empty(&self) -> bool {
+        self.cwd_by_path.is_empty()
+    }
 }
 
 /// `YYYY/MM/DD` folders, newest first, at most `RECENT_DAYS`.
@@ -68,10 +107,15 @@ fn recent_day_dirs(root: &Path) -> Vec<PathBuf> {
 
 /// The working directory recorded in a rollout's first line.
 fn rollout_cwd(path: &Path) -> Option<PathBuf> {
+    // Read at most this much looking for the end of the first line.
+    const MAX_FIRST_LINE: u64 = 256 * 1024;
     let mut first = String::new();
-    BufReader::new(File::open(path).ok()?)
+    BufReader::new(File::open(path).ok()?.take(MAX_FIRST_LINE))
         .read_line(&mut first)
         .ok()?;
+    if !first.ends_with('\n') {
+        return None;
+    }
     let value: Value = serde_json::from_str(&first).ok()?;
     if value.get("type").and_then(Value::as_str) != Some("session_meta") {
         return None;
@@ -259,6 +303,53 @@ mod tests {
                 r#"{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"y","output":"aborted by user after 3.2s"}}"#
             ),
             [act(ActivityKind::CommandFailed, "exec")]
+        );
+    }
+
+    #[test]
+    fn rollout_index_reads_each_first_line_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let day = dir.path().join("2026/11/27");
+        std::fs::create_dir_all(&day).expect("mkdir");
+        let rollout = day.join("rollout-a.jsonl");
+        std::fs::write(
+            &rollout,
+            "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/work/app\"}}\n",
+        )
+        .expect("write");
+        let mut index = RolloutIndex::default();
+        assert_eq!(
+            index.candidates(dir.path(), Path::new("/work/app")).len(),
+            1
+        );
+        // The first line is cached: rewriting it does not change the answer.
+        std::fs::write(
+            &rollout,
+            "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/work/other\"}}\n",
+        )
+        .expect("write");
+        assert_eq!(
+            index.candidates(dir.path(), Path::new("/work/app")).len(),
+            1
+        );
+        assert_eq!(index.len(), 1);
+    }
+
+    #[test]
+    fn rollout_with_oversized_first_line_is_skipped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let day = dir.path().join("2026/11/27");
+        std::fs::create_dir_all(&day).expect("mkdir");
+        let huge = format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"cwd\":\"/work/app\",\"pad\":\"{}\"}}}}\n",
+            "x".repeat(300 * 1024)
+        );
+        std::fs::write(day.join("rollout-big.jsonl"), huge).expect("write");
+        let mut index = RolloutIndex::default();
+        assert!(
+            index
+                .candidates(dir.path(), Path::new("/work/app"))
+                .is_empty()
         );
     }
 

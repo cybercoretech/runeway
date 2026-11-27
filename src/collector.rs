@@ -1,6 +1,10 @@
 //! Polls the sources and folds what they report into one `World`.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    time::{Instant, SystemTime},
+};
 
 use crate::{
     config::Config,
@@ -8,7 +12,7 @@ use crate::{
     sources::{
         agentdeck::SessionLister,
         claude::{self, ClaudeParser},
-        codex::{self, CodexParser},
+        codex::{CodexParser, RolloutIndex},
         tail::Tail,
     },
 };
@@ -34,6 +38,8 @@ impl Parser {
 struct Follower {
     tail: Tail,
     parser: Parser,
+    /// When the file last grew (or was opened).
+    last_growth: Instant,
 }
 
 /// Owns the world state and the open transcripts.
@@ -43,6 +49,7 @@ pub struct Collector {
     world: World,
     followers: HashMap<String, Follower>,
     source_error: Option<String>,
+    codex_index: RolloutIndex,
 }
 
 impl Collector {
@@ -52,6 +59,7 @@ impl Collector {
             world: World::default(),
             followers: HashMap::new(),
             source_error: None,
+            codex_index: RolloutIndex::default(),
         }
     }
 
@@ -59,6 +67,11 @@ impl Collector {
     /// their new lines, and fold everything into the world. Returns the
     /// events applied, in order.
     pub fn step(&mut self, lister: &dyn SessionLister) -> Vec<Event> {
+        self.step_at(lister, Instant::now())
+    }
+
+    /// `step` with the current time passed in, so tests can move time.
+    pub fn step_at(&mut self, lister: &dyn SessionLister, now: Instant) -> Vec<Event> {
         let mut events = Vec::new();
         match lister.list() {
             Ok(sessions) => {
@@ -71,7 +84,7 @@ impl Collector {
         for event in &events {
             self.world.apply(event.clone());
         }
-        let mut transcript_events = self.read_transcripts();
+        let mut transcript_events = self.read_transcripts(now);
         for event in &transcript_events {
             self.world.apply(event.clone());
         }
@@ -110,7 +123,11 @@ impl Collector {
 
     /// Start following newly found transcripts, switch to newer ones, and
     /// read what was appended since the last step.
-    fn read_transcripts(&mut self) -> Vec<Event> {
+    ///
+    /// No two lanes follow the same file. A lane keeps its file until that
+    /// file has been quiet for `switch_after` and a newer one exists, so lanes
+    /// sharing a folder never flip between transcripts.
+    fn read_transcripts(&mut self, now: Instant) -> Vec<Event> {
         let mut events = Vec::new();
         let sessions: Vec<Session> = self
             .world
@@ -118,21 +135,52 @@ impl Collector {
             .iter()
             .map(|lane| lane.session.clone())
             .collect();
+        let mut claimed: HashSet<PathBuf> = self
+            .followers
+            .values()
+            .map(|follower| follower.tail.path().to_path_buf())
+            .collect();
         for session in sessions {
-            let found = self.find_transcript(&session);
             let current = self
                 .followers
                 .get(&session.id)
-                .map(|follower| follower.tail.path().to_path_buf());
-            if found.is_some() && found != current {
+                .map(|follower| (follower.tail.path().to_path_buf(), follower.last_growth));
+            let candidates = self.candidates(&session);
+            let mtime_of = |path: &Path| {
+                candidates
+                    .iter()
+                    .find(|(_, candidate)| candidate == path)
+                    .map(|(modified, _)| *modified)
+            };
+            // The newest file no other lane follows.
+            let pick = candidates
+                .iter()
+                .map(|(_, path)| path)
+                .find(|path| {
+                    !claimed.contains(*path)
+                        || current.as_ref().is_some_and(|(own, _)| own == *path)
+                })
+                .cloned();
+            let switch_to = match (&current, &pick) {
+                (None, Some(pick)) => Some(pick.clone()),
+                (Some((own, last_growth)), Some(pick)) if pick != own => {
+                    let quiet =
+                        now.saturating_duration_since(*last_growth) >= self.config.switch_after;
+                    let newer = mtime_of(pick) >= mtime_of(own);
+                    (quiet && newer).then(|| pick.clone())
+                }
+                _ => None,
+            };
+            if let Some(path) = switch_to {
+                if let Some((own, _)) = &current {
+                    claimed.remove(own);
+                }
                 self.followers.remove(&session.id);
-                if let Some((follower, lines)) =
-                    found.as_ref().and_then(|path| self.open(&session, path))
-                {
-                    let mut follower = follower;
+                if let Some((mut follower, lines)) = self.open(&session, &path, now) {
                     for line in lines {
                         events.extend(follower.parser.parse_line(&session.id, &line));
                     }
+                    claimed.insert(path);
                     self.followers.insert(session.id.clone(), follower);
                 }
             }
@@ -146,13 +194,18 @@ impl Collector {
             };
             match follower.tail.read_new() {
                 Ok(lines) => {
+                    if !lines.is_empty() {
+                        follower.last_growth = now;
+                    }
                     for line in lines {
                         events.extend(follower.parser.parse_line(&session.id, &line));
                     }
                 }
                 // The file went away; look for it again next step.
                 Err(_) => {
-                    self.followers.remove(&session.id);
+                    if let Some(gone) = self.followers.remove(&session.id) {
+                        claimed.remove(gone.tail.path());
+                    }
                     self.world.set_transcript(&session.id, None);
                 }
             }
@@ -160,22 +213,37 @@ impl Collector {
         events
     }
 
-    fn find_transcript(&self, session: &Session) -> Option<PathBuf> {
+    /// Transcripts that could belong to `session`, newest first.
+    fn candidates(&mut self, session: &Session) -> Vec<(SystemTime, PathBuf)> {
         match session.tool {
-            Tool::Claude => claude::find_transcript(&self.config.claude_projects, &session.path),
-            Tool::Codex => codex::find_transcript(&self.config.codex_sessions, &session.path),
-            _ => None,
+            Tool::Claude => claude::candidates(&self.config.claude_projects, &session.path),
+            Tool::Codex => self
+                .codex_index
+                .candidates(&self.config.codex_sessions, &session.path),
+            _ => Vec::new(),
         }
     }
 
-    fn open(&self, session: &Session, path: &std::path::Path) -> Option<(Follower, Vec<String>)> {
+    fn open(
+        &self,
+        session: &Session,
+        path: &Path,
+        now: Instant,
+    ) -> Option<(Follower, Vec<String>)> {
         let parser = match session.tool {
             Tool::Claude => Parser::Claude(ClaudeParser::new(self.config.claude_context_window)),
             Tool::Codex => Parser::Codex(CodexParser),
             _ => return None,
         };
         let (tail, lines) = Tail::open_at_end(path, self.config.backfill_bytes).ok()?;
-        Some((Follower { tail, parser }, lines))
+        Some((
+            Follower {
+                tail,
+                parser,
+                last_growth: now,
+            },
+            lines,
+        ))
     }
 }
 
@@ -395,6 +463,90 @@ mod tests {
         assert!(!report.codex_dir);
         let none = check(&config(home.path()), None);
         assert!(none.agent_deck.is_err());
+    }
+
+    fn set_age(path: &Path, seconds_ago: u64) {
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(seconds_ago);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("open")
+            .set_modified(when)
+            .expect("mtime");
+    }
+
+    #[test]
+    fn two_sessions_in_one_folder_follow_different_transcripts() {
+        let home = tempfile::tempdir().expect("home");
+        let dir = home.path().join(".claude/projects/-w-app");
+        append(&dir.join("one.jsonl"), READ_LINE);
+        append(&dir.join("two.jsonl"), EDIT_LINE);
+        set_age(&dir.join("one.jsonl"), 60);
+        let lister = FakeLister::new(vec![
+            session("a", Tool::Claude, "/w/app"),
+            session("b", Tool::Claude, "/w/app"),
+        ]);
+        let mut collector = Collector::new(config(home.path()));
+        let start = std::time::Instant::now();
+        collector.step_at(&lister, start);
+        let first: Vec<Option<PathBuf>> = collector
+            .world()
+            .lanes
+            .iter()
+            .map(|l| l.transcript.clone())
+            .collect();
+        assert!(first[0].is_some() && first[1].is_some());
+        assert_ne!(first[0], first[1], "both lanes follow the same file");
+        // Stable across steps: no flip-flopping between the two files.
+        for second in 1..5 {
+            collector.step_at(&lister, start + std::time::Duration::from_secs(second));
+            let now: Vec<Option<PathBuf>> = collector
+                .world()
+                .lanes
+                .iter()
+                .map(|l| l.transcript.clone())
+                .collect();
+            assert_eq!(now, first);
+        }
+    }
+
+    #[test]
+    fn newer_transcript_replaces_current_only_after_it_goes_quiet() {
+        let home = tempfile::tempdir().expect("home");
+        let dir = home.path().join(".claude/projects/-w-app");
+        let old = dir.join("old.jsonl");
+        let new = dir.join("new.jsonl");
+        append(&old, READ_LINE);
+        set_age(&old, 60);
+        let lister = FakeLister::new(vec![session("a", Tool::Claude, "/w/app")]);
+        let mut config = config(home.path());
+        config.switch_after = std::time::Duration::from_secs(30);
+        let mut collector = Collector::new(config);
+        let start = std::time::Instant::now();
+        collector.step_at(&lister, start);
+        assert_eq!(
+            collector.world().lanes[0].transcript.as_deref(),
+            Some(old.as_path())
+        );
+
+        // A newer file appears while the current one is still being written.
+        append(&old, READ_LINE);
+        append(&new, EDIT_LINE);
+        // Filesystem timestamps can tie for files written microseconds apart;
+        // in real use the new file is newer by seconds, so say so explicitly.
+        set_age(&old, 10);
+        collector.step_at(&lister, start + std::time::Duration::from_secs(5));
+        assert_eq!(
+            collector.world().lanes[0].transcript.as_deref(),
+            Some(old.as_path())
+        );
+
+        // The current file stays quiet past the limit: switch.
+        collector.step_at(&lister, start + std::time::Duration::from_secs(40));
+        assert_eq!(
+            collector.world().lanes[0].transcript.as_deref(),
+            Some(new.as_path())
+        );
     }
 
     #[test]
