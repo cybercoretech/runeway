@@ -123,8 +123,14 @@ fn processes_in(proc_root: &Path, names: &[&str], cwd: &Path) -> Vec<u32> {
         .collect()
 }
 
+/// `path` with symlinks and trailing slashes resolved, when it exists.
+fn resolved(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.components().collect())
+}
+
 /// Processes named one of `names` whose working directory is `cwd`.
 fn matching(proc_root: &Path, names: &[&str], cwd: &Path) -> Vec<u32> {
+    let cwd = resolved(cwd);
     if names.is_empty() {
         return Vec::new();
     }
@@ -137,7 +143,7 @@ fn matching(proc_root: &Path, names: &[&str], cwd: &Path) -> Vec<u32> {
             let dir = proc_root.join(pid.to_string());
             let comm = std::fs::read_to_string(dir.join("comm")).unwrap_or_default();
             names.contains(&comm.trim())
-                && std::fs::read_link(dir.join("cwd")).is_ok_and(|c| c == cwd)
+                && std::fs::read_link(dir.join("cwd")).is_ok_and(|c| resolved(&c) == cwd)
         })
         .collect();
     pids.sort_unstable();
@@ -297,6 +303,30 @@ mod tests {
             plan(&s, false, &proc.root, &[900]),
             JumpPlan::FocusWindow(900)
         );
+    }
+
+    #[test]
+    fn folder_reached_through_a_symlink_or_trailing_slash_matches() {
+        let dirs = tempfile::tempdir().expect("dirs");
+        let real = dirs.path().join("real");
+        std::fs::create_dir_all(&real).expect("real");
+        let link = dirs.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("link");
+        let proc = Proc::new();
+        proc.add(900, 1, "ghostty", None).add(
+            920,
+            900,
+            "codex",
+            Some(real.to_str().expect("utf8")),
+        );
+        for path in [link.display().to_string(), format!("{}/", real.display())] {
+            let s = session(Tool::Codex, &path);
+            assert_eq!(
+                plan(&s, false, &proc.root, &[900]),
+                JumpPlan::FocusWindow(900),
+                "{path}"
+            );
+        }
     }
 
     #[test]
