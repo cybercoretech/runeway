@@ -1,6 +1,8 @@
 //! `runeway`: wiring only. Parse flags, build the config and sources, run.
 
+mod app;
 mod cli;
+mod view;
 
 use std::{
     env,
@@ -46,7 +48,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             .clone()
             .or_else(|| find_on_path("agent-deck"));
     }
-    let lister: Box<dyn SessionLister> = match (&config.agent_deck, cli.no_agent_deck) {
+    let lister: Box<dyn SessionLister + Send> = match (&config.agent_deck, cli.no_agent_deck) {
         (_, true) => Box::new(Unavailable("turned off with --no-agent-deck".to_string())),
         (Some(program), false) => Box::new(AgentDeck::new(program.clone())),
         (None, false) => Box::new(Unavailable(
@@ -55,8 +57,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
     };
 
     match cli.command.unwrap_or(Command::Watch) {
-        // Until the live view lands, `watch` prints the status once.
-        Command::Watch | Command::Status { json: false } => {
+        Command::Watch => {
+            app::run(Collector::new(config), lister)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Status { json: false } => {
             let mut collector = Collector::new(config);
             collector.step(lister.as_ref());
             print!(
