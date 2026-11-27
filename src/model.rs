@@ -129,6 +129,8 @@ pub struct Session {
     /// The transcript to follow, when the lister already knows it
     /// (discovered sessions). `None` lets the collector search for it.
     pub transcript: Option<PathBuf>,
+    /// The agent's process, when a source knows it (Claude session records).
+    pub pid: Option<u32>,
 }
 
 /// Everything a source can report. `detail` is a short label only, never file
@@ -272,6 +274,7 @@ mod tests {
             status,
             tmux_session: Some(format!("tmux-{id}")),
             transcript: None,
+            pid: None,
         }
     }
 

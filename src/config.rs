@@ -13,6 +13,10 @@ pub struct Config {
     pub claude_projects: PathBuf,
     /// Codex's `sessions` folder (`YYYY/MM/DD/rollout-*.jsonl`).
     pub codex_sessions: PathBuf,
+    /// Claude Code's running-session records (`<pid>.json`).
+    pub claude_sessions: PathBuf,
+    /// Where process information lives (`/proc` on Linux).
+    pub proc_root: PathBuf,
     /// The `agent-deck` program, if one was found or given.
     pub agent_deck: Option<PathBuf>,
     /// Context window used for Claude's context meter, in tokens.
@@ -34,6 +38,8 @@ impl Config {
         Config {
             claude_projects: home.join(".claude/projects"),
             codex_sessions: home.join(".codex/sessions"),
+            claude_sessions: home.join(".claude/sessions"),
+            proc_root: PathBuf::from("/proc"),
             agent_deck: None,
             claude_context_window: 200_000,
             backfill_bytes: 256 * 1024,

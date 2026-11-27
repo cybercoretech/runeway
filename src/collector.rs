@@ -322,6 +322,7 @@ mod tests {
             status: SessionStatus::Running,
             tmux_session: None,
             transcript: None,
+            pid: None,
         }
     }
 

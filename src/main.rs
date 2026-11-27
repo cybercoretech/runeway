@@ -71,11 +71,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let lister: Box<dyn SessionLister + Send> = if cli.no_discover {
         deck
     } else {
-        let discovery = Discovery::new(
+        let mut discovery = Discovery::new(
             config.claude_projects.clone(),
             config.codex_sessions.clone(),
             config.discover_within,
         );
+        discovery.claude_sessions =
+            Some((config.claude_sessions.clone(), config.proc_root.clone()));
         Box::new(Combined::new(deck, discovery))
     };
 

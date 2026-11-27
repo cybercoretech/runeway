@@ -237,6 +237,7 @@ mod tests {
             status,
             tmux_session: None,
             transcript: None,
+            pid: None,
         };
         world.apply(Event::Session(session(
             "app",
@@ -336,6 +337,7 @@ mod tests {
                 status: SessionStatus::Running,
                 tmux_session: None,
                 transcript: None,
+                pid: None,
             }));
         }
         let top = screen(&world, &ListView::default(), None);

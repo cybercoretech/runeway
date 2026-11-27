@@ -525,6 +525,7 @@ mod tests {
             status,
             tmux_session: None,
             transcript: None,
+            pid: None,
         }));
         if let Some((kind, detail)) = activity {
             world.apply(Event::Activity {

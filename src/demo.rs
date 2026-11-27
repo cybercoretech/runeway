@@ -25,6 +25,7 @@ pub fn world_at(tick: u64) -> World {
             status,
             tmux_session: None,
             transcript: None,
+            pid: None,
         }));
         world.apply(Event::Activity {
             id: id.to_string(),

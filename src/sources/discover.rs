@@ -18,6 +18,7 @@ use crate::{
     sources::{
         agentdeck::SessionLister,
         claude::slug_for,
+        claude_sessions::{read_records, status_from},
         codex::{RolloutIndex, recent_day_dirs},
     },
 };
@@ -34,6 +35,9 @@ pub struct Discovery {
     /// How often every Claude project folder is listed; between full scans
     /// only folders that recently held an active transcript are read.
     pub full_scan_every: Duration,
+    /// Claude's session-record folder and the proc root, for live status
+    /// and process ids of discovered Claude sessions.
+    pub claude_sessions: Option<(PathBuf, PathBuf)>,
     codex_index: RefCell<RolloutIndex>,
     /// Claude project folders that held an active transcript at the last
     /// full scan, and when that scan ran.
@@ -50,6 +54,7 @@ impl Discovery {
             active_within,
             running_within: Duration::from_secs(60),
             full_scan_every: Duration::from_secs(15),
+            claude_sessions: None,
             codex_index: RefCell::new(RolloutIndex::default()),
             active_dirs: RefCell::new((None, Vec::new())),
             claude_cwd: RefCell::new(HashMap::new()),
@@ -59,6 +64,11 @@ impl Discovery {
     /// Sessions for transcripts modified within `active_within` of `now`.
     pub fn list_at(&self, now: SystemTime) -> Vec<Session> {
         let mut found: Vec<(SystemTime, Session)> = Vec::new();
+        let records = self
+            .claude_sessions
+            .as_ref()
+            .map(|(dir, proc_root)| read_records(dir, proc_root))
+            .unwrap_or_default();
         for dir in self.claude_dirs(now) {
             let slug = dir
                 .file_name()
@@ -76,10 +86,15 @@ impl Discovery {
                         PathBuf::new(),
                     ),
                 };
-                found.push((
-                    modified,
-                    self.session(Tool::Claude, &file, modified, now, title, path),
-                ));
+                let mut session = self.session(Tool::Claude, &file, modified, now, title, path);
+                let stem = file.file_stem().map(|stem| stem.to_string_lossy());
+                if let Some(record) = stem.and_then(|stem| records.get(stem.as_ref())) {
+                    session.pid = Some(record.pid);
+                    if let Some(status) = record.status.as_deref().and_then(status_from) {
+                        session.status = status;
+                    }
+                }
+                found.push((modified, session));
             }
         }
         for day in recent_day_dirs(&self.codex_sessions) {
@@ -190,6 +205,7 @@ impl Discovery {
             tool,
             tmux_session: None,
             transcript: Some(file.to_path_buf()),
+            pid: None,
         }
     }
 }
@@ -332,6 +348,7 @@ mod tests {
             status: SessionStatus::Running,
             tmux_session: None,
             transcript: None,
+            pid: None,
         }
     }
 
@@ -391,6 +408,30 @@ mod tests {
         assert_eq!(discovery.list_at(now + Duration::from_secs(1)).len(), 1);
         let later = now + discovery.full_scan_every + Duration::from_secs(1);
         assert_eq!(discovery.list_at(later).len(), 2);
+    }
+
+    #[test]
+    fn discovered_claude_session_takes_record_status_and_pid() {
+        let home = tempfile::tempdir().expect("home");
+        write(
+            &home.path().join(".claude/projects/-w-app/abc.jsonl"),
+            "{}\n",
+            5,
+        );
+        let sessions_dir = home.path().join(".claude/sessions");
+        std::fs::create_dir_all(&sessions_dir).expect("sessions");
+        std::fs::write(
+            sessions_dir.join("77.json"),
+            "{\"pid\":77,\"sessionId\":\"abc\",\"status\":\"waiting\"}",
+        )
+        .expect("record");
+        let proc_root = home.path().join("proc");
+        std::fs::create_dir_all(proc_root.join("77")).expect("proc");
+        let mut discovery = discovery(home.path());
+        discovery.claude_sessions = Some((sessions_dir, proc_root));
+        let sessions = discovery.list_at(SystemTime::now());
+        assert_eq!(sessions[0].status, SessionStatus::Waiting);
+        assert_eq!(sessions[0].pid, Some(77));
     }
 
     #[test]

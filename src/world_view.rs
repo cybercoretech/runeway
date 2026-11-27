@@ -336,6 +336,7 @@ mod tests {
             status,
             tmux_session: None,
             transcript: None,
+            pid: None,
         }
     }
 
