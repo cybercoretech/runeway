@@ -2,6 +2,7 @@
 
 mod app;
 mod cli;
+mod jumper;
 mod view;
 mod world_view;
 
@@ -91,6 +92,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let options = app::Options {
                 lowres: cli.lowres,
                 fps: cli::frame_rate(cli.fps),
+                proc_root: config.proc_root.clone(),
             };
             if cli.demo {
                 app::run_demo(options)?;

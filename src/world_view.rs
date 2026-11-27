@@ -35,6 +35,8 @@ const SELECTED: Color = Color::Rgb(0x40, 0xe0, 0xf0);
 const MUTED: Color = Color::Rgb(0x7d, 0x8a, 0x99);
 /// Narrowest terminal the world is drawn in.
 const MIN_WIDTH: u16 = 24;
+/// How long a notice stays in the footer (3 s at 30 ticks a second).
+pub const NOTICE_TICKS: u32 = 90;
 /// Segments in the context meter.
 const METER: usize = 5;
 
@@ -48,6 +50,8 @@ pub struct WorldView {
     pub sims: HashMap<String, LaneSim>,
     pub mode: ViewMode,
     pub lowres: bool,
+    /// A short message for the footer and the ticks it has left.
+    notice: Option<(String, u32)>,
 }
 
 /// Which lanes are drawn in full and which as one compact line.
@@ -89,7 +93,13 @@ impl WorldView {
             sims: HashMap::new(),
             mode: ViewMode::World,
             lowres,
+            notice: None,
         }
+    }
+
+    /// Show `text` in the footer for a few seconds.
+    pub fn set_notice(&mut self, text: String) {
+        self.notice = Some((text, NOTICE_TICKS));
     }
 
     pub fn toggle(&mut self) {
@@ -121,6 +131,12 @@ impl WorldView {
 
     /// Advance every lane one animation tick.
     pub fn tick(&mut self) {
+        if let Some((_, left)) = &mut self.notice {
+            *left = left.saturating_sub(1);
+            if *left == 0 {
+                self.notice = None;
+            }
+        }
         for sim in self.sims.values_mut() {
             sim.tick();
         }
@@ -189,11 +205,14 @@ impl WorldView {
         } else {
             String::new()
         };
-        frame.render_widget(
-            Paragraph::new(format!("↑↓ select · {more}l list · ? help · q quit"))
-                .style(Style::new().fg(MUTED)),
-            row(area, footer_y),
-        );
+        let footer = match &self.notice {
+            Some((text, _)) => Paragraph::new(text.clone()).style(Style::new().fg(WAITING)),
+            None => Paragraph::new(format!(
+                "↑↓ select · {more}⏎ jump · l list · ? help · q quit"
+            ))
+            .style(Style::new().fg(MUTED)),
+        };
+        frame.render_widget(footer, row(area, footer_y));
         if view.show_help {
             view::render_help(frame, area);
         }
@@ -579,6 +598,23 @@ mod tests {
         );
         wv.toggle();
         assert_eq!(wv.mode, ViewMode::World);
+    }
+
+    #[test]
+    fn notice_shows_in_footer_then_expires() {
+        let mut wv = WorldView::new(false);
+        wv.set_notice("no window found for app".into());
+        let (lines, _) = screen(100, 30, &world(), &mut wv, &ListView::default());
+        assert!(
+            lines[29].contains("no window found for app"),
+            "{}",
+            lines[29]
+        );
+        for _ in 0..NOTICE_TICKS {
+            wv.tick();
+        }
+        let (lines, _) = screen(100, 30, &world(), &mut wv, &ListView::default());
+        assert!(lines[29].contains("q quit"), "{}", lines[29]);
     }
 
     #[test]

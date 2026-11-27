@@ -25,6 +25,8 @@ pub enum Action {
     Quit,
     /// Switch between the world and the list.
     ToggleView,
+    /// Go to the selected agent.
+    Jump,
 }
 
 /// View state for the list.
@@ -48,6 +50,7 @@ impl ListView {
             KeyCode::Esc | KeyCode::Char('q') => return Action::Quit,
             KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('l') => return Action::ToggleView,
+            KeyCode::Enter if lanes > 0 => return Action::Jump,
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected = (self.selected + 1).min(lanes.saturating_sub(1));
@@ -196,15 +199,19 @@ fn scroll_window(total: usize, visible: usize, selected: usize) -> (usize, usize
 pub fn render_help(frame: &mut Frame, area: Rect) {
     let lines = [
         "↑ ↓  or  k j   select an agent",
+        "Enter          go to the agent",
         "l              world or list view",
         "?              show or hide this help",
         "q  Esc  Ctrl-C quit",
     ];
+    // Below the top bar and the notice line, so neither is hidden.
+    const KEEP_TOP: u16 = 2;
     let width = 40.min(area.width);
-    let height = (lines.len() as u16 + 2).min(area.height);
+    let room = area.height.saturating_sub(KEEP_TOP);
+    let height = (lines.len() as u16 + 2).min(room);
     let popup = Rect {
         x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
+        y: area.y + KEEP_TOP + (room - height) / 2,
         width,
         height,
     };
@@ -297,6 +304,13 @@ mod tests {
         assert_eq!(view.selected, 1);
         view.handle_key(key(KeyCode::Down), 0);
         assert_eq!(view.selected, 0);
+    }
+
+    #[test]
+    fn enter_returns_jump_action() {
+        let mut view = ListView::default();
+        assert_eq!(view.handle_key(key(KeyCode::Enter), 2), Action::Jump);
+        assert_eq!(view.handle_key(key(KeyCode::Enter), 0), Action::None);
     }
 
     #[test]

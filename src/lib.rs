@@ -4,6 +4,7 @@ pub mod collector;
 pub mod config;
 pub mod demo;
 pub mod error;
+pub mod jump;
 pub mod model;
 pub mod sources;
 pub mod status;
