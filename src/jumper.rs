@@ -1,7 +1,16 @@
 //! Carries out a jump plan: runs `tmux` or `hyprctl` (no shell, output
 //! captured so nothing reaches the screen) and returns a one-line notice.
 
-use std::process::Command;
+use std::{
+    io::Read,
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+/// The longest a jump waits for tmux or hyprctl.
+const TIMEOUT: Duration = Duration::from_secs(2);
+const DONE: &str = "jumped to the agent's window";
 
 use runeway::jump::JumpPlan;
 use serde_json::Value;
@@ -12,7 +21,8 @@ pub fn window_pids() -> Vec<u32> {
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
         return Vec::new();
     }
-    let Ok(output) = Command::new("hyprctl").args(["clients", "-j"]).output() else {
+    let Ok(output) = run_with_timeout(Command::new("hyprctl").args(["clients", "-j"]), TIMEOUT)
+    else {
         return Vec::new();
     };
     serde_json::from_slice::<Value>(&output.stdout)
@@ -34,7 +44,7 @@ pub fn run(plan: &JumpPlan) -> String {
     match plan {
         JumpPlan::TmuxSwitch(name) => command(
             "tmux",
-            &["switch-client", "-t", name],
+            &tmux_switch_args(name),
             format!("switched to tmux session {name}"),
         ),
         JumpPlan::TmuxAttachHint(hint) => format!("not inside tmux · attach with: {hint}"),
@@ -46,27 +56,21 @@ pub fn run(plan: &JumpPlan) -> String {
 /// Hyprland 0.57+ takes Lua dispatches; older versions take the classic
 /// `focuswindow` form, so that is tried when the Lua form is rejected.
 fn focus_window(pid: u32) -> String {
-    const DONE: &str = "jumped to the agent's window";
     let lua = format!("hl.dsp.focus({{ window = \"pid:{pid}\" }})");
-    match hyprctl(&["dispatch", &lua]) {
-        Ok(()) => DONE.to_string(),
-        Err(lua_err) if lua_err.contains("error") || lua_err.contains("Invalid") => {
-            match hyprctl(&["dispatch", "focuswindow", &format!("pid:{pid}")]) {
-                Ok(()) => DONE.to_string(),
-                Err(err) => format!("hyprctl: {err}"),
-            }
+    let lua_result = hyprctl(&["dispatch", &lua]);
+    let classic = match &lua_result {
+        Err(err) if err.contains("error") || err.contains("Invalid") => {
+            Some(hyprctl(&["dispatch", "focuswindow", &format!("pid:{pid}")]))
         }
-        Err(err) => format!("hyprctl: {err}"),
-    }
+        _ => None,
+    };
+    focus_message(lua_result, classic)
 }
 
 /// Run hyprctl; it reports problems on stdout and often exits 0, so any
 /// output other than "ok" counts as a failure.
 fn hyprctl(args: &[&str]) -> Result<(), String> {
-    let output = Command::new("hyprctl")
-        .args(args)
-        .output()
-        .map_err(|err| format!("could not run: {err}"))?;
+    let output = run_with_timeout(Command::new("hyprctl").args(args), TIMEOUT)?;
     let text = String::from_utf8_lossy(&output.stdout);
     let text = text.trim();
     if output.status.success() && (text.is_empty() || text == "ok") {
@@ -82,14 +86,133 @@ fn hyprctl(args: &[&str]) -> Result<(), String> {
     }
 }
 
-fn command(program: &str, args: &[&str], done: String) -> String {
-    match Command::new(program).args(args).output() {
+fn command(program: &str, args: &[String], done: String) -> String {
+    match run_with_timeout(Command::new(program).args(args), TIMEOUT) {
         Ok(output) if output.status.success() => done,
         Ok(output) => {
             let err = String::from_utf8_lossy(&output.stderr);
             let first = err.lines().next().unwrap_or("").trim();
             format!("{program} failed: {first}")
         }
-        Err(err) => format!("{program} could not run: {err}"),
+        Err(err) => format!("{program}: {err}"),
+    }
+}
+
+/// `tmux switch-client` to exactly `name` (`=` stops prefix matching).
+fn tmux_switch_args(name: &str) -> Vec<String> {
+    vec!["switch-client".into(), "-t".into(), format!("={name}")]
+}
+
+/// The notice for a focus attempt: the Lua dispatch's result, and the
+/// classic form's when the Lua one was rejected.
+fn focus_message(lua: Result<(), String>, classic: Option<Result<(), String>>) -> String {
+    match (lua, classic) {
+        (Ok(()), _) | (Err(_), Some(Ok(()))) => DONE.to_string(),
+        // The Lua error says more on Hyprland 0.57+ than the classic one.
+        (Err(lua_err), _) => format!("hyprctl: {lua_err}"),
+    }
+}
+
+/// Run `command`, giving up after `limit` so a stuck tool cannot freeze
+/// the screen.
+fn run_with_timeout(command: &mut Command, limit: Duration) -> Result<Output, String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("could not run: {err}"))?;
+    // Read both pipes while waiting, so a large output cannot fill a pipe
+    // and stall the child.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < limit => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("timed out after {} ms", limit.as_millis()));
+            }
+            Err(err) => return Err(err.to_string()),
+        }
+    };
+    Ok(Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tmux_target_is_exact() {
+        assert_eq!(
+            tmux_switch_args("deck_a"),
+            ["switch-client", "-t", "=deck_a"]
+        );
+    }
+
+    #[test]
+    fn both_focus_forms_failing_reports_the_lua_error() {
+        let message = focus_message(
+            Err("error: lua parse failed".into()),
+            Some(Err("Invalid dispatcher".into())),
+        );
+        assert!(message.contains("lua parse failed"), "{message}");
+        assert_eq!(focus_message(Ok(()), None), "jumped to the agent's window");
+        assert_eq!(
+            focus_message(Err("error: x".into()), Some(Ok(()))),
+            "jumped to the agent's window"
+        );
+        assert!(focus_message(Err("window not found".into()), None).contains("window not found"));
+    }
+
+    #[test]
+    fn run_with_timeout_reads_large_output() {
+        let output = run_with_timeout(
+            Command::new("head").args(["-c", "200000", "/dev/zero"]),
+            Duration::from_secs(2),
+        )
+        .expect("large output");
+        assert_eq!(output.stdout.len(), 200_000);
+    }
+
+    #[test]
+    fn run_with_timeout_gives_up() {
+        let start = std::time::Instant::now();
+        let result = run_with_timeout(Command::new("sleep").arg("5"), Duration::from_millis(200));
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(result.expect_err("timed out").contains("timed out"));
+        let quick = run_with_timeout(Command::new("true").arg(""), Duration::from_secs(2));
+        assert!(quick.is_ok());
     }
 }

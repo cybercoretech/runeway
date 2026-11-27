@@ -22,6 +22,12 @@ pub enum JumpPlan {
     NotFound(String),
 }
 
+/// Whether planning a jump to `session` needs the window list (asking the
+/// window manager costs a call, so tmux jumps skip it).
+pub fn needs_windows(session: &Session) -> bool {
+    session.tmux_session.is_none()
+}
+
 /// The plan for `session`. `window_pids` are the processes that own a
 /// window (empty when no window manager can be asked).
 pub fn plan(session: &Session, in_tmux: bool, proc_root: &Path, window_pids: &[u32]) -> JumpPlan {
@@ -194,6 +200,14 @@ mod tests {
             transcript: None,
             pid: None,
         }
+    }
+
+    #[test]
+    fn only_non_tmux_jumps_need_windows() {
+        let mut s = session(Tool::Claude, "/w");
+        assert!(needs_windows(&s));
+        s.tmux_session = Some("deck".into());
+        assert!(!needs_windows(&s));
     }
 
     #[test]
