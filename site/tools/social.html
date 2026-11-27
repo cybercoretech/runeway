@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- The 1200x630 social card (assets/social.png). Rebuild: open this page
+     at 1200x630 (served next to ../assets) and save a screenshot, e.g. with
+     Playwright: page.setViewportSize({width:1200,height:630}); page.screenshot(). -->
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=Orbitron:wght@800&family=Press+Start+2P&family=VT323&display=swap">
+<style>
+  html, body { margin: 0; width: 1200px; height: 630px; background: #0a0818; overflow: hidden; }
+  body { position: relative; color: #ecf0ff; font-family: "IBM Plex Mono", monospace; }
+  .floor { position: absolute; left: 0; right: 0; bottom: 0; height: 250px; background: linear-gradient(transparent 94%, rgba(255,84,170,.5) 0) 0 0/100% 26px, linear-gradient(90deg, transparent 96%, rgba(255,84,170,.35) 0) 0 0/60px 100%; transform: perspective(300px) rotateX(55deg); transform-origin: bottom; opacity: .6; }
+  .sun { position: absolute; right: 120px; top: 120px; width: 260px; height: 260px; background: repeating-linear-gradient(#ffcc40 0 14px, transparent 14px 20px), linear-gradient(#ff54aa, #ffcc40); -webkit-mask: radial-gradient(circle, #000 69%, transparent 70%); opacity: .9; }
+  .copy { position: absolute; left: 72px; top: 70px; }
+  h1 { margin: 0 0 26px; font: 400 76px/1 "Press Start 2P", monospace; text-shadow: 6px 6px 0 #ff54aa, 12px 12px 0 #06040c; }
+  .tag { margin: 0 0 14px; font: 400 46px/1 "VT323", monospace; color: #40e0f0; }
+  .sub { margin: 0; font: 400 24px/1.4 "IBM Plex Mono", monospace; color: #b3afd8; max-width: 640px; }
+  canvas { position: absolute; left: 0; bottom: 34px; width: 1200px; height: 200px; image-rendering: pixelated; }
+  .chip { position: absolute; left: 72px; bottom: 10px; font: 800 18px/1 "Orbitron", sans-serif; letter-spacing: .2em; color: #ffcc40; }
+</style></head><body>
+<div class="floor"></div><div class="sun"></div>
+<div class="copy">
+  <h1>RUNEWAY</h1>
+  <p class="tag">EVERY AGENT GETS A LANE.</p>
+  <p class="sub">Your coding agents as a retro side-scroller in the terminal.</p>
+</div>
+<canvas id="c" width="240" height="40"></canvas>
+<p class="chip">OPEN SOURCE · RUST · CYBERCORE TECH</p>
+<script type="module">
+  const data = await fetch("../assets/sprites.json").then(r => r.json());
+  const g = document.getElementById("c").getContext("2d");
+  const draw = (name, x, y) => { const s = data.sprites[name]; for (let i = 0; i < s.px.length; i++) { const k = parseInt(s.px[i], 16); if (!k) continue; g.fillStyle = data.palette[k]; g.fillRect(x + i % s.w, y + Math.floor(i / s.w), 1, 1); } };
+  for (let x = 0; x < 240; x += 8) draw("ground", x, 32);
+  const cast = ["rune_run_1", "brass_run_1", "drone_run_1", "twin_run_2", "cyber_run_1"];
+  cast.forEach((n, i) => { const s = data.sprites[n]; draw(n, 22 + i * 40, 32 - s.h); });
+  [[38, 10], [78, 8], [118, 12], [158, 9]].forEach(([x, y]) => draw("glyph_coin", x, y));
+  document.body.dataset.ready = "1";
+</script>
+</body></html>
