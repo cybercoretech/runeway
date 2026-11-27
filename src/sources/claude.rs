@@ -163,12 +163,53 @@ fn classify(name: &str, input: &Value) -> (ActivityKind, String) {
 }
 
 /// The program name of a shell command: its first word, nothing more.
+///
+/// Leading `NAME=value` assignments (which often hold tokens) and wrapper
+/// programs such as `env` or `sudo`, with their flags, are skipped. Anything
+/// that does not look like a plain program name becomes `command`, so a label
+/// can never carry a secret or an argument.
 pub(crate) fn first_word(command: Option<&Value>) -> String {
-    command
-        .and_then(Value::as_str)
-        .and_then(|command| command.split_whitespace().next())
-        .map(|word| word.rsplit('/').next().unwrap_or(word).to_string())
-        .unwrap_or_else(|| "command".to_string())
+    const WRAPPERS: [&str; 8] = [
+        "env", "sudo", "time", "nohup", "nice", "exec", "command", "doas",
+    ];
+    /// Wrapper flags that take a value as the next word.
+    const VALUE_FLAGS: [&str; 4] = ["-u", "-g", "-n", "-C"];
+    const FALLBACK: &str = "command";
+
+    let Some(command) = command.and_then(Value::as_str) else {
+        return FALLBACK.to_string();
+    };
+    let mut words = command.split_whitespace().peekable();
+    let mut in_wrapper = false;
+    while let Some(word) = words.next() {
+        let is_assignment = word.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if is_assignment {
+            continue;
+        }
+        if in_wrapper && word.starts_with('-') {
+            if VALUE_FLAGS.contains(&word) {
+                words.next();
+            }
+            continue;
+        }
+        if WRAPPERS.contains(&word) {
+            in_wrapper = true;
+            continue;
+        }
+        let name = word.rsplit('/').next().unwrap_or(word);
+        let plain = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'));
+        return if plain {
+            name.to_string()
+        } else {
+            FALLBACK.to_string()
+        };
+    }
+    FALLBACK.to_string()
 }
 
 #[cfg(test)]
@@ -269,6 +310,23 @@ mod tests {
             parser.parse_line("s", line),
             [act(ActivityKind::RunningCommand, "cargo")]
         );
+    }
+
+    #[test]
+    fn command_label_never_leaks_env_values_or_odd_words() {
+        let label = |command: &str| first_word(Some(&serde_json::Value::String(command.into())));
+        assert_eq!(label("GITHUB_TOKEN=ghp_secret gh pr create"), "gh");
+        assert_eq!(label("A=1 B=2 cargo build"), "cargo");
+        assert_eq!(label("env -u GITHUB_TOKEN gh pr view"), "gh");
+        assert_eq!(label("env API_KEY=x node app.js"), "node");
+        assert_eq!(label("sudo pacman -S foo"), "pacman");
+        assert_eq!(label("time cargo test"), "cargo");
+        assert_eq!(label("nohup ./serve.sh &"), "serve.sh");
+        assert_eq!(label("/usr/bin/cargo check"), "cargo");
+        assert_eq!(label("\"$(cat token)\" run"), "command");
+        assert_eq!(label("$TOOL --flag"), "command");
+        assert_eq!(label("TOKEN=abc"), "command");
+        assert_eq!(label("   "), "command");
     }
 
     #[test]
