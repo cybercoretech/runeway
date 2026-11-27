@@ -147,9 +147,9 @@ pub fn render(
     frame.render_widget(table, body);
 
     let keys = if hidden > 0 {
-        format!("↑↓ select · +{hidden} more · l world · ? help · q quit")
+        format!("↑↓ select · +{hidden} more · ⏎ jump · l world · ? help · q quit")
     } else {
-        "↑↓ select · l world · ? help · q quit".to_string()
+        "↑↓ select · ⏎ jump · l world · ? help · q quit".to_string()
     };
     frame.render_widget(Paragraph::new(keys).style(Style::new().fg(MUTED)), footer);
 

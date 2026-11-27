@@ -8,9 +8,11 @@
 
 [![CI](https://github.com/cybercoretech/runeway/actions/workflows/ci.yml/badge.svg)](https://github.com/cybercoretech/runeway/actions/workflows/ci.yml)
 
+<img src="docs/screenshots/world.svg" alt="Runeway's world view: four agent lanes. A hooded rune-runner editing, a brass automaton running make among gears and steam, a hover-drone stopped at a rune gate waiting for you, and twin spirit orbs editing." width="100%">
+
 </div>
 
-Runeway watches your coding agents: the ones you run through [agent-deck](https://github.com/asheshgoplani/agent-deck) (Claude Code, Codex, OpenCode, Gemini and others), plus any Claude Code or Codex session that is busy on its own. It shows what each one is doing right now, how many tokens it has used, how full its context is, and which ones are waiting for your answer.
+Runeway watches your coding agents: the ones you run through [agent-deck](https://github.com/asheshgoplani/agent-deck) (Claude Code, Codex, OpenCode, Gemini and others), plus any Claude Code, Codex or OpenCode session that is busy on its own. It shows what each one is doing right now, how many tokens it has used, how full its context is, and which ones are waiting for your answer.
 
 Every agent gets its own lane and an original pixel-art runner, in the spirit of the 8-bit side-scrollers of the 1980s. The whole cast, world and look are original.
 
@@ -19,12 +21,12 @@ Every agent gets its own lane and an original pixel-art runner, in the spirit of
 | Phase | What | State |
 |---|---|---|
 | 1 | Data sources, `runeway status`, `runeway check`, live list view | ✅ done |
-| 2 | The platformer: half-block pixel renderer, lanes, the original cast, HUD, agents outside agent-deck, `--demo`, CI | ✅ this branch |
-| 3 | Jump to an agent's tmux pane, OpenCode transcripts, lane themes | 🔜 later |
+| 2 | The platformer: half-block pixel renderer, lanes, the original cast, HUD, agents outside agent-deck, `--demo`, CI | ✅ done |
+| 3 | `Enter` jumps to an agent, `p` pauses, OpenCode agents, Claude's live status | ✅ this branch |
 
 ## 📦 Install
 
-Rust 1.88 or newer:
+Rust 1.89 or newer:
 
 ```bash
 cargo install --path .
@@ -37,12 +39,14 @@ runeway              # the world view (q, Esc or Ctrl-C to quit, ? for help)
 runeway --demo       # four scripted agents, no real ones needed
 runeway status       # one line per agent, then exit
 runeway status --json
-runeway check        # which sources were found; exits 1 if agent-deck can't be asked
+runeway check        # which sources were found (agent-deck, Claude, Codex, OpenCode); exits 1 if agent-deck can't be asked
 ```
 
 | Key | Does |
 |---|---|
 | `↑` `↓` / `k` `j` | Select an agent |
+| `Enter` | Go to the selected agent: its tmux session, or the terminal window running it (Hyprland) |
+| `p` | Pause or resume the animation |
 | `l` | Switch between the world and the plain list |
 | `?` | Show or hide the keys |
 | `q` / `Esc` / `Ctrl-C` | Quit (the terminal is always restored) |
@@ -97,12 +101,18 @@ Example `runeway status`:
 | 🃏 `agent-deck ls --json` | Which sessions exist, their status (`waiting` = needs you) and tmux session | `agent-deck` on your `PATH` |
 | 🧙 Claude Code transcripts | Tool calls (reading, editing, commands), results, token use | `~/.claude/projects/` |
 | 🤖 Codex rollouts | Commands and their results, token use and context window | `~/.codex/sessions/` |
+| 🛸 OpenCode database | Sessions, tool calls and token totals, opened read-only | `~/.local/share/opencode/opencode.db` |
+| 🧙 Claude session records | Each running Claude's process id and live status (busy, idle, waiting) | `~/.claude/sessions/*.json` (the `.key` files beside them are never opened) |
 
 🪙 Token counts cover what Runeway has read: the most recent part of each transcript when it starts (at most 256 KiB), then everything new. They are not a lifetime total, so they restart when Runeway restarts. The context % is always current.
 
-Override any of them with `--agent-deck PATH`, `--claude-dir DIR` and `--codex-dir DIR`, or skip agent-deck with `--no-agent-deck`. Agents without a readable transcript still appear, using agent-deck's status alone.
+Override any of them with `--agent-deck PATH`, `--claude-dir DIR`, `--codex-dir DIR` and `--opencode-db PATH`, or skip agent-deck with `--no-agent-deck`. Agents without a readable transcript still appear, using agent-deck's status alone.
 
-🔭 **Agents outside agent-deck.** Any Claude Code or Codex transcript written to in the last 10 minutes gets a lane too, named after its project folder. It runs while the file grew in the last minute, sits after that, and leaves when the file has been quiet for 10 minutes. A session agent-deck already lists is not shown twice. Turn this off with `--no-discover`. Without agent-deck installed (or with `--no-agent-deck`), Runeway just shows the agents it discovers, with no warning; `runeway check` still tells you agent-deck is missing.
+🔭 **Agents outside agent-deck.** Any Claude Code or Codex transcript written to in the last 10 minutes, and any OpenCode session active in that time, gets a lane too, named after its project folder. A running Claude shows Claude's own status, so it stops at the gate when it waits for you. It runs while the file grew in the last minute, sits after that, and leaves when the file has been quiet for 10 minutes. A session agent-deck already lists is not shown twice. Turn this off with `--no-discover`. Without agent-deck installed (or with `--no-agent-deck`), Runeway just shows the agents it discovers, with no warning; `runeway check` still tells you agent-deck is missing.
+
+🚪 **Going to an agent.** `Enter` on an agent-deck session with a tmux session switches to it (inside tmux) or shows the `tmux attach` command. For any other agent, Runeway finds its process, walks up to the window that owns it and asks Hyprland to focus it. If two Codex or OpenCode agents share a folder, it says it can't tell which rather than guessing.
+
+<img src="docs/screenshots/list.svg" alt="The plain list view (l): one row per agent with tool, status, what it is doing, tokens and context." width="100%">
 
 ## 🔒 Privacy
 
@@ -123,6 +133,7 @@ The tests use hand-written fixtures under `tests/fixtures/`, never real transcri
 
 ```bash
 cargo run --example sprite_sheet               # every sprite at 4×, for a visual check
+cargo run --example screenshot                 # redraw docs/screenshots/*.svg from the demo
 cargo run --release --example frame_bench      # frame time for 12 lanes at 160×48 (target < 4 ms)
 RUNEWAY_UPDATE_SNAPSHOTS=1 cargo test lane     # rewrite the lane snapshot after a deliberate change
 ```
