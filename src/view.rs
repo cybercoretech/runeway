@@ -23,6 +23,8 @@ const MUTED: Color = Color::Rgb(0x7d, 0x8a, 0x99);
 pub enum Action {
     None,
     Quit,
+    /// Switch between the world and the list.
+    ToggleView,
 }
 
 /// View state for the list.
@@ -45,6 +47,7 @@ impl ListView {
             KeyCode::Esc if self.show_help => self.show_help = false,
             KeyCode::Esc | KeyCode::Char('q') => return Action::Quit,
             KeyCode::Char('?') => self.show_help = !self.show_help,
+            KeyCode::Char('l') => return Action::ToggleView,
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected = (self.selected + 1).min(lanes.saturating_sub(1));
@@ -73,32 +76,13 @@ pub fn render(
     ])
     .areas(area);
 
-    let waiting = world.waiting_count();
-    let waiting_style = if waiting > 0 {
-        Style::new().fg(GOLD).add_modifier(Modifier::BOLD)
-    } else {
-        Style::new().fg(MUTED)
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "runeway",
-                Style::new().fg(CYAN).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(" · {} · ", count_noun(world.lanes.len(), "agent"))),
-            Span::styled(format!("{waiting} waiting"), waiting_style),
-        ])),
-        title,
-    );
+    frame.render_widget(Paragraph::new(top_bar(world)), title);
 
     let mut body = body;
     if let Some(error) = source_error {
         let [notice, rest] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
-        frame.render_widget(
-            Paragraph::new(format!("agent-deck unavailable: {error}")).style(Style::new().fg(GOLD)),
-            notice,
-        );
+        frame.render_widget(source_notice(error), notice);
         body = rest;
     }
 
@@ -157,15 +141,44 @@ pub fn render(
     frame.render_widget(table, body);
 
     let keys = if hidden > 0 {
-        format!("↑↓ select · +{hidden} more · ? help · q quit")
+        format!("↑↓ select · +{hidden} more · l world · ? help · q quit")
     } else {
-        "↑↓ select · ? help · q quit".to_string()
+        "↑↓ select · l world · ? help · q quit".to_string()
     };
     frame.render_widget(Paragraph::new(keys).style(Style::new().fg(MUTED)), footer);
 
     if view.show_help {
         render_help(frame, area);
     }
+}
+
+/// The top line both views share:
+/// `runeway · N agents · M waiting · Σ 12.4k tokens`.
+pub fn top_bar(world: &World) -> Line<'static> {
+    let waiting = world.waiting_count();
+    let waiting_style = if waiting > 0 {
+        Style::new().fg(GOLD).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(MUTED)
+    };
+    let tokens: u64 = world.lanes.iter().map(|lane| lane.tokens_total).sum();
+    Line::from(vec![
+        Span::styled(
+            "runeway",
+            Style::new().fg(CYAN).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" · {} · ", count_noun(world.lanes.len(), "agent"))),
+        Span::styled(format!("{waiting} waiting"), waiting_style),
+        Span::styled(
+            format!(" · Σ {} tokens", abbreviate_tokens(tokens)),
+            Style::new().fg(GOLD),
+        ),
+    ])
+}
+
+/// The agent-deck notice line, when there is one.
+pub fn source_notice(error: &str) -> Paragraph<'static> {
+    Paragraph::new(format!("agent-deck unavailable: {error}")).style(Style::new().fg(GOLD))
 }
 
 /// First row to show and how many rows are out of view, for `total` rows,
@@ -180,9 +193,10 @@ fn scroll_window(total: usize, visible: usize, selected: usize) -> (usize, usize
     (offset, total.saturating_sub(visible))
 }
 
-fn render_help(frame: &mut Frame, area: Rect) {
+pub fn render_help(frame: &mut Frame, area: Rect) {
     let lines = [
         "↑ ↓  or  k j   select an agent",
+        "l              world or list view",
         "?              show or hide this help",
         "q  Esc  Ctrl-C quit",
     ];
@@ -222,6 +236,7 @@ mod tests {
             tool,
             status,
             tmux_session: None,
+            transcript: None,
         };
         world.apply(Event::Session(session(
             "app",
@@ -320,6 +335,7 @@ mod tests {
                 tool: Tool::Claude,
                 status: SessionStatus::Running,
                 tmux_session: None,
+                transcript: None,
             }));
         }
         let top = screen(&world, &ListView::default(), None);

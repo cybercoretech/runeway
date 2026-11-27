@@ -75,7 +75,7 @@ impl Collector {
         let mut events = Vec::new();
         match lister.list() {
             Ok(sessions) => {
-                self.source_error = None;
+                self.source_error = lister.last_error();
                 self.diff_sessions(sessions, &mut events);
             }
             // Keep the last known world; the views show the reason.
@@ -215,6 +215,12 @@ impl Collector {
 
     /// Transcripts that could belong to `session`, newest first.
     fn candidates(&mut self, session: &Session) -> Vec<(SystemTime, PathBuf)> {
+        if let Some(path) = &session.transcript {
+            let modified = std::fs::metadata(path).and_then(|meta| meta.modified());
+            return modified
+                .map(|modified| vec![(modified, path.clone())])
+                .unwrap_or_default();
+        }
         match session.tool {
             Tool::Claude => claude::candidates(&self.config.claude_projects, &session.path),
             Tool::Codex => self
@@ -315,6 +321,7 @@ mod tests {
             tool,
             status: SessionStatus::Running,
             tmux_session: None,
+            transcript: None,
         }
     }
 
@@ -550,11 +557,30 @@ mod tests {
     }
 
     #[test]
+    fn collector_follows_the_transcript_hint() {
+        let home = tempfile::tempdir().expect("home");
+        let dir = home.path().join(".claude/projects/-w-app");
+        let hinted = dir.join("hinted.jsonl");
+        append(&hinted, READ_LINE);
+        set_age(&hinted, 60);
+        append(&dir.join("newer.jsonl"), EDIT_LINE);
+        let mut hinted_session = session("claude:hinted", Tool::Claude, "");
+        hinted_session.transcript = Some(hinted.clone());
+        let lister = FakeLister::new(vec![hinted_session]);
+        let mut collector = Collector::new(config(home.path()));
+        collector.step(&lister);
+        let lane = &collector.world().lanes[0];
+        assert_eq!(lane.transcript.as_deref(), Some(hinted.as_path()));
+        assert_eq!(lane.activity, ActivityKind::Reading);
+    }
+
+    #[test]
     fn config_defaults_from_home() {
         let config = Config::from_home(Path::new("/h"));
         assert_eq!(config.claude_projects, Path::new("/h/.claude/projects"));
         assert_eq!(config.codex_sessions, Path::new("/h/.codex/sessions"));
         assert_eq!(config.claude_context_window, 200_000);
         assert_eq!(config.backfill_bytes, 262_144);
+        assert_eq!(config.discover_within, std::time::Duration::from_secs(600));
     }
 }

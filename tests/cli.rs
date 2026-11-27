@@ -11,11 +11,17 @@ fn fixtures() -> PathBuf {
 
 /// Run runeway with an isolated HOME and empty transcript folders.
 fn runeway(args: &[&str], agent_deck: &Path) -> Output {
+    runeway_seeded(args, agent_deck, |_| {})
+}
+
+/// `runeway`, after `seed` has filled the Claude projects folder.
+fn runeway_seeded(args: &[&str], agent_deck: &Path, seed: impl FnOnce(&Path)) -> Output {
     let home = tempfile::tempdir().expect("home");
     let claude = home.path().join("claude");
     let codex = home.path().join("codex");
     std::fs::create_dir_all(&claude).expect("claude dir");
     std::fs::create_dir_all(&codex).expect("codex dir");
+    seed(&claude);
     Command::new(env!("CARGO_BIN_EXE_runeway"))
         .args(args)
         .arg("--agent-deck")
@@ -110,4 +116,32 @@ fn help_lists_the_commands() {
     for command in ["watch", "status", "check"] {
         assert!(text.contains(command), "{text}");
     }
+}
+
+fn seed_recent_claude_transcript(claude: &Path) {
+    let dir = claude.join("-w-solo-agent");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("s1.jsonl"), "{}\n").expect("write");
+}
+
+#[test]
+fn status_shows_agents_found_outside_agent_deck() {
+    let output = runeway_seeded(
+        &["status"],
+        &fake_agent_deck(),
+        seed_recent_claude_transcript,
+    );
+    let text = stdout(&output);
+    assert!(text.contains("agent"), "{text}");
+    assert_eq!(text.lines().last(), Some("4 agents, 1 waiting"));
+}
+
+#[test]
+fn no_discover_leaves_them_out() {
+    let output = runeway_seeded(
+        &["status", "--no-discover"],
+        &fake_agent_deck(),
+        seed_recent_claude_transcript,
+    );
+    assert_eq!(stdout(&output).lines().last(), Some("3 agents, 1 waiting"));
 }

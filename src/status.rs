@@ -29,13 +29,18 @@ pub fn status_rows(world: &World) -> Vec<StatusRow> {
     world.lanes.iter().map(row).collect()
 }
 
-fn row(lane: &LaneState) -> StatusRow {
+/// What the lane is doing, as shown: "editing lib.rs", "waiting for you".
+pub fn action_label(lane: &LaneState) -> String {
     let verb = lane.activity.verb();
-    let action = if lane.detail.is_empty() {
+    if lane.detail.is_empty() {
         verb.to_string()
     } else {
         format!("{verb} {}", lane.detail)
-    };
+    }
+}
+
+fn row(lane: &LaneState) -> StatusRow {
+    let action = action_label(lane);
     StatusRow {
         title: lane.session.title.clone(),
         tool: lane.session.tool.name().to_string(),
@@ -133,6 +138,7 @@ mod tests {
             tool,
             status,
             tmux_session: None,
+            transcript: None,
         };
         world.apply(Event::Session(session(
             "app",

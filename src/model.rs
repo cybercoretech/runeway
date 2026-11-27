@@ -126,6 +126,9 @@ pub struct Session {
     pub tool: Tool,
     pub status: SessionStatus,
     pub tmux_session: Option<String>,
+    /// The transcript to follow, when the lister already knows it
+    /// (discovered sessions). `None` lets the collector search for it.
+    pub transcript: Option<PathBuf>,
 }
 
 /// Everything a source can report. `detail` is a short label only, never file
@@ -268,6 +271,7 @@ mod tests {
             tool: Tool::Claude,
             status,
             tmux_session: Some(format!("tmux-{id}")),
+            transcript: None,
         }
     }
 
