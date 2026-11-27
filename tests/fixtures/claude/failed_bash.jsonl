@@ -1,0 +1,2 @@
+{"type":"assistant","sessionId":"s2","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Bash","input":{"command":"cargo check"}}]}}
+{"type":"user","sessionId":"s2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t9","is_error":true,"content":"error[E0425]: cannot find value"}]}}
