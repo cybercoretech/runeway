@@ -102,9 +102,15 @@ pub fn render(
         body = rest;
     }
 
-    let rows: Vec<Row> = status_rows(world)
+    // Show the window of rows that keeps the selection on screen.
+    let all = status_rows(world);
+    let visible = usize::from(body.height.saturating_sub(1)); // minus the header
+    let (offset, hidden) = scroll_window(all.len(), visible, view.selected);
+    let rows: Vec<Row> = all
         .into_iter()
         .enumerate()
+        .skip(offset)
+        .take(visible)
         .map(|(index, row)| {
             let mark = if row.waiting {
                 Span::styled("!", Style::new().fg(GOLD).add_modifier(Modifier::BOLD))
@@ -150,14 +156,28 @@ pub fn render(
     );
     frame.render_widget(table, body);
 
-    frame.render_widget(
-        Paragraph::new("↑↓ select · ? help · q quit").style(Style::new().fg(MUTED)),
-        footer,
-    );
+    let keys = if hidden > 0 {
+        format!("↑↓ select · +{hidden} more · ? help · q quit")
+    } else {
+        "↑↓ select · ? help · q quit".to_string()
+    };
+    frame.render_widget(Paragraph::new(keys).style(Style::new().fg(MUTED)), footer);
 
     if view.show_help {
         render_help(frame, area);
     }
+}
+
+/// First row to show and how many rows are out of view, for `total` rows,
+/// `visible` lines and the selected row.
+fn scroll_window(total: usize, visible: usize, selected: usize) -> (usize, usize) {
+    if visible == 0 {
+        return (0, total);
+    }
+    let offset = (selected + 1)
+        .saturating_sub(visible)
+        .min(total.saturating_sub(visible));
+    (offset, total.saturating_sub(visible))
 }
 
 fn render_help(frame: &mut Frame, area: Rect) {
@@ -287,6 +307,33 @@ mod tests {
             "{lines:#?}"
         );
         assert!(lines[9].contains("q quit"), "{lines:#?}");
+    }
+
+    #[test]
+    fn long_lists_scroll_to_the_selection_and_say_how_many_are_hidden() {
+        let mut world = World::default();
+        for n in 0..12 {
+            world.apply(Event::Session(Session {
+                id: format!("s{n}"),
+                title: format!("agent{n:02}"),
+                path: PathBuf::from("/w"),
+                tool: Tool::Claude,
+                status: SessionStatus::Running,
+                tmux_session: None,
+            }));
+        }
+        let top = screen(&world, &ListView::default(), None);
+        assert!(top.iter().any(|l| l.contains("agent00")), "{top:#?}");
+        assert!(top[9].contains("+5 more"), "{top:#?}");
+
+        let bottom = ListView {
+            selected: 11,
+            show_help: false,
+        };
+        let lines = screen(&world, &bottom, None);
+        assert!(lines.iter().any(|l| l.contains("agent11")), "{lines:#?}");
+        assert!(!lines.iter().any(|l| l.contains("agent00")), "{lines:#?}");
+        assert!(lines[9].contains("+5 more"), "{lines:#?}");
     }
 
     #[test]
