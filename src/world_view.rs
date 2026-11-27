@@ -113,6 +113,11 @@ impl WorldView {
         }
     }
 
+    /// True while any lane on the world view moves (drawn at full rate).
+    pub fn animating(&self) -> bool {
+        self.mode == ViewMode::World && self.sims.values().any(LaneSim::is_animating)
+    }
+
     /// Advance every lane one animation tick.
     pub fn tick(&mut self) {
         for sim in self.sims.values_mut() {

@@ -77,7 +77,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
     match command {
         Command::Watch => {
-            app::run(Collector::new(config), lister, cli.lowres)?;
+            let options = app::Options {
+                lowres: cli.lowres,
+                fps: cli::frame_rate(cli.fps),
+            };
+            if cli.demo {
+                app::run_demo(options)?;
+            } else {
+                app::run(Collector::new(config), lister, options)?;
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Status { json: false } => {

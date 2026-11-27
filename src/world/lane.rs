@@ -257,6 +257,18 @@ impl LaneSim {
         });
     }
 
+    /// True while something moves: the level scrolls, an effect plays, the
+    /// runner is in the air or knocked back, or a companion follows. A lane
+    /// that only sits or stands still is not animating.
+    pub fn is_animating(&self) -> bool {
+        scroll_speed(self.runner.state) > 0
+            || !self.effects.is_empty()
+            || self.runner.y > 0
+            || self.runner.x != 0
+            || self.runner.state == RunnerState::Stumbling
+            || self.companion > 0
+    }
+
     /// Where the runner stands on screen (its usual spot).
     fn home_x(width: usize) -> i32 {
         (width / 4).min(24) as i32
@@ -705,6 +717,21 @@ mod tests {
             let mut px = Pixels::new(w, h, color(SKY));
             sim.render(&mut px);
         }
+    }
+
+    #[test]
+    fn only_moving_lanes_are_animating() {
+        let mut sim = LaneSim::new(&running(ActivityKind::Thinking, ""));
+        assert!(sim.is_animating(), "running scrolls");
+        let mut waiting = lane("a", Tool::Claude, SessionStatus::Waiting, None);
+        waiting.last_change += 1;
+        sim.sync(&waiting);
+        ticks(&mut sim, 5);
+        assert!(!sim.is_animating(), "standing at the gate");
+        let mut edit = running(ActivityKind::Editing, "x.rs");
+        edit.last_change += 2;
+        sim.sync(&edit);
+        assert!(sim.is_animating(), "jumping");
     }
 
     #[test]
