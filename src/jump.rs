@@ -22,6 +22,12 @@ pub enum JumpPlan {
     NotFound(String),
 }
 
+/// Whether planning a jump to `session` needs the window list (asking the
+/// window manager costs a call, so tmux jumps skip it).
+pub fn needs_windows(session: &Session) -> bool {
+    session.tmux_session.is_none()
+}
+
 /// The plan for `session`. `window_pids` are the processes that own a
 /// window (empty when no window manager can be asked).
 pub fn plan(session: &Session, in_tmux: bool, proc_root: &Path, window_pids: &[u32]) -> JumpPlan {
@@ -117,8 +123,14 @@ fn processes_in(proc_root: &Path, names: &[&str], cwd: &Path) -> Vec<u32> {
         .collect()
 }
 
+/// `path` with symlinks and trailing slashes resolved, when it exists.
+fn resolved(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.components().collect())
+}
+
 /// Processes named one of `names` whose working directory is `cwd`.
 fn matching(proc_root: &Path, names: &[&str], cwd: &Path) -> Vec<u32> {
+    let cwd = resolved(cwd);
     if names.is_empty() {
         return Vec::new();
     }
@@ -131,7 +143,7 @@ fn matching(proc_root: &Path, names: &[&str], cwd: &Path) -> Vec<u32> {
             let dir = proc_root.join(pid.to_string());
             let comm = std::fs::read_to_string(dir.join("comm")).unwrap_or_default();
             names.contains(&comm.trim())
-                && std::fs::read_link(dir.join("cwd")).is_ok_and(|c| c == cwd)
+                && std::fs::read_link(dir.join("cwd")).is_ok_and(|c| resolved(&c) == cwd)
         })
         .collect();
     pids.sort_unstable();
@@ -194,6 +206,14 @@ mod tests {
             transcript: None,
             pid: None,
         }
+    }
+
+    #[test]
+    fn only_non_tmux_jumps_need_windows() {
+        let mut s = session(Tool::Claude, "/w");
+        assert!(needs_windows(&s));
+        s.tmux_session = Some("deck".into());
+        assert!(!needs_windows(&s));
     }
 
     #[test]
@@ -283,6 +303,30 @@ mod tests {
             plan(&s, false, &proc.root, &[900]),
             JumpPlan::FocusWindow(900)
         );
+    }
+
+    #[test]
+    fn folder_reached_through_a_symlink_or_trailing_slash_matches() {
+        let dirs = tempfile::tempdir().expect("dirs");
+        let real = dirs.path().join("real");
+        std::fs::create_dir_all(&real).expect("real");
+        let link = dirs.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("link");
+        let proc = Proc::new();
+        proc.add(900, 1, "ghostty", None).add(
+            920,
+            900,
+            "codex",
+            Some(real.to_str().expect("utf8")),
+        );
+        for path in [link.display().to_string(), format!("{}/", real.display())] {
+            let s = session(Tool::Codex, &path);
+            assert_eq!(
+                plan(&s, false, &proc.root, &[900]),
+                JumpPlan::FocusWindow(900),
+                "{path}"
+            );
+        }
     }
 
     #[test]

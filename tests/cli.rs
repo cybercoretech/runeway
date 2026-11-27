@@ -183,3 +183,34 @@ fn agent_deck_not_installed_without_discovery_still_explains() {
     let text = status_without_agent_deck_on_path(&["--no-discover"]);
     assert!(text.starts_with("agent-deck unavailable:"), "{text}");
 }
+
+/// `runeway check` with OpenCode's database at `db`.
+fn check_with_opencode_db(db: &Path) -> String {
+    let home = tempfile::tempdir().expect("home");
+    let output = Command::new(env!("CARGO_BIN_EXE_runeway"))
+        .arg("check")
+        .arg("--agent-deck")
+        .arg(fake_agent_deck())
+        .arg("--opencode-db")
+        .arg(db)
+        .env("HOME", home.path())
+        .output()
+        .expect("run runeway");
+    stdout(&output)
+}
+
+#[test]
+fn check_says_missing_for_an_absent_opencode_db() {
+    let dir = tempfile::tempdir().expect("dir");
+    let text = check_with_opencode_db(&dir.path().join("none.db"));
+    assert!(text.contains("opencode    missing:"), "{text}");
+}
+
+#[test]
+fn check_says_error_for_a_broken_opencode_db() {
+    let dir = tempfile::tempdir().expect("dir");
+    let db = dir.path().join("opencode.db");
+    std::fs::write(&db, "this is not a database").expect("write");
+    let text = check_with_opencode_db(&db);
+    assert!(text.contains("opencode    error:"), "{text}");
+}

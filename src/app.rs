@@ -192,11 +192,16 @@ fn event_loop(
                         Action::Jump => {
                             if let Some(lane) = world.lanes.get(view.selected) {
                                 let in_tmux = std::env::var_os("TMUX").is_some();
+                                let windows = if jump::needs_windows(&lane.session) {
+                                    jumper::window_pids()
+                                } else {
+                                    Vec::new()
+                                };
                                 let plan = jump::plan(
                                     &lane.session,
                                     in_tmux,
                                     &options.proc_root,
-                                    &jumper::window_pids(),
+                                    &windows,
                                 );
                                 world_view.set_notice(jumper::run(&plan));
                             }

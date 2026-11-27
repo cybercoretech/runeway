@@ -235,10 +235,16 @@ impl Collector {
             .filter(|id| id.starts_with(OPENCODE_PREFIX))
             .collect();
         self.opencode_seen.retain(|id, _| ids.contains(id));
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        // One connection for every OpenCode lane this poll.
+        let Ok(Some(reader)) = self.opencode.reader() else {
+            return Vec::new();
+        };
         let mut events = Vec::new();
         for id in ids {
-            let Ok(Some((kind, detail, tokens))) =
-                self.opencode.latest(&id[OPENCODE_PREFIX.len()..])
+            let Ok(Some((kind, detail, tokens))) = reader.latest(&id[OPENCODE_PREFIX.len()..])
             else {
                 continue;
             };
