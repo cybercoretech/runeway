@@ -19,6 +19,8 @@ pub enum Error {
     },
     #[error("agent-deck: {0}")]
     AgentDeck(String),
+    #[error("opencode database: {0}")]
+    OpenCode(String),
 }
 
 /// Library result.

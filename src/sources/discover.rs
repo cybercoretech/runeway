@@ -20,6 +20,7 @@ use crate::{
         claude::slug_for,
         claude_sessions::{read_records, status_from},
         codex::{RolloutIndex, recent_day_dirs},
+        opencode::OpenCodeDb,
     },
 };
 
@@ -38,6 +39,8 @@ pub struct Discovery {
     /// Claude's session-record folder and the proc root, for live status
     /// and process ids of discovered Claude sessions.
     pub claude_sessions: Option<(PathBuf, PathBuf)>,
+    /// OpenCode's database, when OpenCode sessions should be listed.
+    pub opencode: Option<OpenCodeDb>,
     codex_index: RefCell<RolloutIndex>,
     /// Claude project folders that held an active transcript at the last
     /// full scan, and when that scan ran.
@@ -55,6 +58,7 @@ impl Discovery {
             running_within: Duration::from_secs(60),
             full_scan_every: Duration::from_secs(15),
             claude_sessions: None,
+            opencode: None,
             codex_index: RefCell::new(RolloutIndex::default()),
             active_dirs: RefCell::new((None, Vec::new())),
             claude_cwd: RefCell::new(HashMap::new()),
@@ -111,6 +115,13 @@ impl Discovery {
                     self.session(Tool::Codex, &file, modified, now, title, path),
                 ));
             }
+        }
+        // OpenCode keeps no transcript file; its sessions come from its
+        // database. A database error leaves them out (`check` reports it).
+        if let Some(db) = &self.opencode
+            && let Ok(sessions) = db.sessions(now, self.active_within)
+        {
+            found.extend(sessions.into_iter().map(|session| (now, session)));
         }
         // Stable order: oldest first, so new agents join at the end.
         found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
@@ -242,7 +253,9 @@ fn covered_by(deck: &[Session], found: &Session) -> bool {
                     .and_then(Path::file_name);
                 folder.is_some_and(|folder| folder.to_string_lossy() == slug_for(&session.path))
             }
-            (Tool::Codex, Tool::Codex) => session.path == found.path,
+            (Tool::Codex, Tool::Codex) | (Tool::OpenCode, Tool::OpenCode) => {
+                session.path == found.path
+            }
             _ => false,
         })
 }
@@ -432,6 +445,30 @@ mod tests {
         let sessions = discovery.list_at(SystemTime::now());
         assert_eq!(sessions[0].status, SessionStatus::Waiting);
         assert_eq!(sessions[0].pid, Some(77));
+    }
+
+    #[test]
+    fn opencode_sessions_are_discovered_once() {
+        use crate::sources::opencode::{OpenCodeDb, tests as oc};
+        let home = tempfile::tempdir().expect("home");
+        let path = home.path().join("opencode.db");
+        let conn = oc::create(&path);
+        let now = SystemTime::now();
+        oc::add_session(&conn, "ses_a", None, "/w/site", oc::ms(now) - 1_000, true);
+        oc::add_session(&conn, "ses_b", None, "/w/api", oc::ms(now) - 1_000, true);
+        let mut discovery = discovery(home.path());
+        discovery.opencode = Some(OpenCodeDb::new(path));
+        let combined = Combined::new(
+            Box::new(Fixed(vec![deck_session("deck", Tool::OpenCode, "/w/api")])),
+            discovery,
+        );
+        let ids: Vec<String> = combined
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ids, ["deck", "opencode:ses_a"]);
     }
 
     #[test]

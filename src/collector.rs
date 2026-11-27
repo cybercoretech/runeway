@@ -8,14 +8,18 @@ use std::{
 
 use crate::{
     config::Config,
-    model::{Event, Session, Tool, World},
+    model::{ActivityKind, Event, Session, Tool, World},
     sources::{
         agentdeck::SessionLister,
         claude::{self, ClaudeParser},
         codex::{CodexParser, RolloutIndex},
+        opencode::OpenCodeDb,
         tail::Tail,
     },
 };
+
+/// Prefix of the lane ids discovery gives OpenCode sessions.
+const OPENCODE_PREFIX: &str = "opencode:";
 
 /// The parser that matches a transcript's agent.
 #[derive(Debug)]
@@ -50,16 +54,21 @@ pub struct Collector {
     followers: HashMap<String, Follower>,
     source_error: Option<String>,
     codex_index: RolloutIndex,
+    opencode: OpenCodeDb,
+    /// The last activity, label and tokens reported per OpenCode lane.
+    opencode_seen: HashMap<String, (ActivityKind, String, u64)>,
 }
 
 impl Collector {
     pub fn new(config: Config) -> Collector {
         Collector {
-            config,
             world: World::default(),
             followers: HashMap::new(),
             source_error: None,
             codex_index: RolloutIndex::default(),
+            opencode: OpenCodeDb::new(config.opencode_db.clone()),
+            opencode_seen: HashMap::new(),
+            config,
         }
     }
 
@@ -85,6 +94,7 @@ impl Collector {
             self.world.apply(event.clone());
         }
         let mut transcript_events = self.read_transcripts(now);
+        transcript_events.extend(self.poll_opencode());
         for event in &transcript_events {
             self.world.apply(event.clone());
         }
@@ -213,6 +223,48 @@ impl Collector {
         events
     }
 
+    /// OpenCode lanes: ask the database for each one's current activity and
+    /// tokens, and report only what changed.
+    fn poll_opencode(&mut self) -> Vec<Event> {
+        let ids: Vec<String> = self
+            .world
+            .lanes
+            .iter()
+            .filter(|lane| lane.session.tool == Tool::OpenCode)
+            .map(|lane| lane.session.id.clone())
+            .filter(|id| id.starts_with(OPENCODE_PREFIX))
+            .collect();
+        self.opencode_seen.retain(|id, _| ids.contains(id));
+        let mut events = Vec::new();
+        for id in ids {
+            let Ok(Some((kind, detail, tokens))) =
+                self.opencode.latest(&id[OPENCODE_PREFIX.len()..])
+            else {
+                continue;
+            };
+            let seen = self.opencode_seen.get(&id);
+            if seen.is_none_or(|(k, d, _)| (*k, d.as_str()) != (kind, detail.as_str())) {
+                events.push(Event::Activity {
+                    id: id.clone(),
+                    kind,
+                    detail: detail.clone(),
+                });
+            }
+            if seen.is_none_or(|(_, _, t)| *t != tokens) {
+                events.push(Event::Usage {
+                    id: id.clone(),
+                    tokens_total: tokens,
+                    context_used: None,
+                });
+            }
+            self.opencode_seen.insert(id, (kind, detail, tokens));
+        }
+        for event in &events {
+            self.world.apply(event.clone());
+        }
+        events
+    }
+
     /// Transcripts that could belong to `session`, newest first.
     fn candidates(&mut self, session: &Session) -> Vec<(SystemTime, PathBuf)> {
         if let Some(path) = &session.transcript {
@@ -260,6 +312,8 @@ pub struct SourceReport {
     pub agent_deck: Result<usize, String>,
     pub claude_dir: bool,
     pub codex_dir: bool,
+    /// Recent OpenCode sessions, or why the database could not be read.
+    pub opencode: Result<usize, String>,
 }
 
 /// Check every source once.
@@ -275,6 +329,14 @@ pub fn check(config: &Config, lister: Option<&dyn SessionLister>) -> SourceRepor
         agent_deck,
         claude_dir: config.claude_projects.is_dir(),
         codex_dir: config.codex_sessions.is_dir(),
+        opencode: if config.opencode_db.is_file() {
+            OpenCodeDb::new(config.opencode_db.clone())
+                .sessions(SystemTime::now(), config.discover_within)
+                .map(|sessions| sessions.len())
+                .map_err(|err| err.to_string())
+        } else {
+            Err(format!("{} not found", config.opencode_db.display()))
+        },
     }
 }
 
@@ -576,6 +638,61 @@ mod tests {
     }
 
     #[test]
+    fn collector_emits_opencode_activity_once() {
+        use crate::sources::opencode::tests as oc;
+        let home = tempfile::tempdir().expect("home");
+        let mut config = config(home.path());
+        config.opencode_db = home.path().join("opencode.db");
+        let conn = oc::create(&config.opencode_db);
+        oc::add_session(
+            &conn,
+            "ses_1",
+            None,
+            "/w/a",
+            oc::ms(std::time::SystemTime::now()),
+            true,
+        );
+        oc::add_tool(
+            &conn,
+            "ses_1",
+            1,
+            "edit",
+            "running",
+            r#"{"filePath":"/w/a/lib.rs"}"#,
+        );
+        let lister = FakeLister::new(vec![session("opencode:ses_1", Tool::OpenCode, "/w/a")]);
+        let mut collector = Collector::new(config);
+        collector.step(&lister);
+        let lane = &collector.world().lanes[0];
+        assert_eq!(
+            (lane.activity, lane.detail.as_str()),
+            (ActivityKind::Editing, "lib.rs")
+        );
+        assert_eq!(lane.tokens_total, 1_234);
+        let again = collector.step(&lister);
+        assert!(again.is_empty(), "nothing changed: {again:?}");
+    }
+
+    #[test]
+    fn check_reports_opencode() {
+        let home = tempfile::tempdir().expect("home");
+        let mut config = config(home.path());
+        config.opencode_db = home.path().join("opencode.db");
+        let report = check(&config, None);
+        assert!(report.opencode.is_err());
+        let conn = crate::sources::opencode::tests::create(&config.opencode_db);
+        crate::sources::opencode::tests::add_session(
+            &conn,
+            "ses_1",
+            None,
+            "/w/a",
+            crate::sources::opencode::tests::ms(std::time::SystemTime::now()),
+            true,
+        );
+        assert_eq!(check(&config, None).opencode, Ok(1));
+    }
+
+    #[test]
     fn config_defaults_from_home() {
         let config = Config::from_home(Path::new("/h"));
         assert_eq!(config.claude_projects, Path::new("/h/.claude/projects"));
@@ -583,5 +700,9 @@ mod tests {
         assert_eq!(config.claude_context_window, 200_000);
         assert_eq!(config.backfill_bytes, 262_144);
         assert_eq!(config.discover_within, std::time::Duration::from_secs(600));
+        assert_eq!(
+            config.opencode_db,
+            Path::new("/h/.local/share/opencode/opencode.db")
+        );
     }
 }

@@ -2,7 +2,7 @@
 name = "runeway"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "A retro side-scrolling view of your running coding agents, in the terminal"
 license = "MIT"
 publish = false
@@ -19,6 +19,7 @@ anyhow = "1.0.105"
 clap = { version = "4.6.10", features = ["derive"] }
 crossterm = "0.29.0"
 ratatui = "0.30.2"
+rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
