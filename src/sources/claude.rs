@@ -44,7 +44,11 @@ pub struct ClaudeParser {
     context_window: u64,
     /// tool_use id -> tool name, until its result arrives.
     pending: HashMap<String, String>,
+    /// Input + output tokens of every distinct message seen so far.
     tokens_total: u64,
+    /// Claude writes one message as several lines that repeat its `usage`;
+    /// only the first line of each message id is counted.
+    last_message_id: Option<String>,
 }
 
 impl ClaudeParser {
@@ -54,6 +58,7 @@ impl ClaudeParser {
             context_window: context_window.max(1),
             pending: HashMap::new(),
             tokens_total: 0,
+            last_message_id: None,
         }
     }
 
@@ -91,7 +96,8 @@ impl ClaudeParser {
                     events.push(activity(ActivityKind::Thinking, String::new()));
                 }
                 if let Some(usage) = value.pointer("/message/usage") {
-                    events.push(self.usage(session_id, usage));
+                    let message_id = value.pointer("/message/id").and_then(Value::as_str);
+                    events.push(self.usage(session_id, message_id, usage));
                 }
             }
             Some("user") => {
@@ -119,10 +125,14 @@ impl ClaudeParser {
         events
     }
 
-    fn usage(&mut self, session_id: &str, usage: &Value) -> Event {
+    fn usage(&mut self, session_id: &str, message_id: Option<&str>, usage: &Value) -> Event {
         let field = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
         let input = field("input_tokens");
-        self.tokens_total += input + field("output_tokens");
+        let repeat = message_id.is_some() && message_id == self.last_message_id.as_deref();
+        if !repeat {
+            self.tokens_total += input + field("output_tokens");
+            self.last_message_id = message_id.map(str::to_string);
+        }
         let in_context =
             input + field("cache_read_input_tokens") + field("cache_creation_input_tokens");
         Event::Usage {
@@ -309,6 +319,46 @@ mod tests {
         assert_eq!(
             parser.parse_line("s", line),
             [act(ActivityKind::RunningCommand, "cargo")]
+        );
+    }
+
+    #[test]
+    fn usage_repeated_for_one_message_is_counted_once() {
+        let mut parser = ClaudeParser::new(1_000);
+        let line = |id: &str, block: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"id":"{id}","content":[{block}],"usage":{{"input_tokens":10,"cache_read_input_tokens":90,"output_tokens":5}}}}}}"#
+            )
+        };
+        let text = r#"{"type":"text","text":"x"}"#;
+        let tool = r#"{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"/a.rs"}}"#;
+        let usage_of = |events: Vec<Event>| {
+            events.into_iter().find_map(|e| match e {
+                Event::Usage {
+                    tokens_total,
+                    context_used,
+                    ..
+                } => Some((tokens_total, context_used)),
+                _ => None,
+            })
+        };
+        // Claude writes one message as several lines, each repeating its usage.
+        assert_eq!(
+            usage_of(parser.parse_line("s", &line("m1", text))),
+            Some((15, Some(0.1)))
+        );
+        assert_eq!(
+            usage_of(parser.parse_line("s", &line("m1", tool))),
+            Some((15, Some(0.1)))
+        );
+        assert_eq!(
+            usage_of(parser.parse_line("s", &line("m1", text))),
+            Some((15, Some(0.1)))
+        );
+        // A new message adds its usage once.
+        assert_eq!(
+            usage_of(parser.parse_line("s", &line("m2", text))),
+            Some((30, Some(0.1)))
         );
     }
 

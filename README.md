@@ -61,6 +61,8 @@ Example `runeway status`:
 | 🧙 Claude Code transcripts | Tool calls (reading, editing, commands), results, token use | `~/.claude/projects/` |
 | 🤖 Codex rollouts | Commands and their results, token use and context window | `~/.codex/sessions/` |
 
+🪙 Token counts cover what Runeway has read: the most recent part of each transcript when it starts (at most 256 KiB), then everything new. They are not a lifetime total, so they restart when Runeway restarts. The context % is always current.
+
 Override any of them with `--agent-deck PATH`, `--claude-dir DIR` and `--codex-dir DIR`, or skip agent-deck with `--no-agent-deck`. Agents without a readable transcript still appear, using agent-deck's status alone.
 
 ## 🔒 Privacy
