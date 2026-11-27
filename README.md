@@ -8,6 +8,8 @@
 
 [![CI](https://github.com/cybercoretech/runeway/actions/workflows/ci.yml/badge.svg)](https://github.com/cybercoretech/runeway/actions/workflows/ci.yml)
 
+🕹️ **Website: [runeway-arcade.pages.dev](https://runeway-arcade.pages.dev/)**
+
 <img src="docs/screenshots/world.svg" alt="Runeway's world view: four agent lanes. A hooded rune-runner editing, a brass automaton running make among gears and steam, a hover-drone stopped at a rune gate waiting for you, and twin spirit orbs editing." width="100%">
 
 </div>
@@ -141,6 +143,10 @@ RUNEWAY_UPDATE_SNAPSHOTS=1 cargo test lane     # rewrite the lane snapshot after
 ```
 
 `tests/originality.rs` fails the build if a borrowed game name shows up in the code or this README.
+
+## 📜 Licence
+
+MIT. See [LICENSE](LICENSE).
 
 ---
 
