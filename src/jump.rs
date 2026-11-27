@@ -80,8 +80,45 @@ fn parent(proc_root: &Path, pid: u32) -> Option<u32> {
     rest.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// Processes named one of `names` whose working directory is `cwd`.
+/// Field 7 of `stat`: the controlling terminal, 0 for background processes.
+fn tty(proc_root: &Path, pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat")).ok()?;
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(4)?.parse().ok()
+}
+
+/// True when one of `pid`'s ancestors is in `others`.
+fn descends_from(proc_root: &Path, pid: u32, others: &[u32]) -> bool {
+    let mut current = pid;
+    for _ in 0..MAX_DEPTH {
+        match parent(proc_root, current) {
+            Some(next) if next > 1 && next != current => {
+                if others.contains(&next) {
+                    return true;
+                }
+                current = next;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Agents named one of `names` whose working directory is `cwd`: on a
+/// terminal (background services are not agents), and counting a wrapper
+/// and the process it starts once.
 fn processes_in(proc_root: &Path, names: &[&str], cwd: &Path) -> Vec<u32> {
+    let found = matching(proc_root, names, cwd);
+    found
+        .iter()
+        .copied()
+        .filter(|pid| tty(proc_root, *pid).is_some_and(|tty| tty != 0))
+        .filter(|pid| !descends_from(proc_root, *pid, &found))
+        .collect()
+}
+
+/// Processes named one of `names` whose working directory is `cwd`.
+fn matching(proc_root: &Path, names: &[&str], cwd: &Path) -> Vec<u32> {
     if names.is_empty() {
         return Vec::new();
     }
@@ -119,13 +156,23 @@ mod tests {
             Proc { _dir: dir, root }
         }
 
-        /// A process with its parent, name and (optionally) working directory.
+        /// A process on a terminal, with its parent, name and (optionally)
+        /// working directory.
         fn add(&self, pid: u32, ppid: u32, comm: &str, cwd: Option<&str>) -> &Proc {
+            self.add_tty(pid, ppid, comm, cwd, 34816)
+        }
+
+        /// A background process: no controlling terminal.
+        fn add_daemon(&self, pid: u32, ppid: u32, comm: &str, cwd: Option<&str>) -> &Proc {
+            self.add_tty(pid, ppid, comm, cwd, 0)
+        }
+
+        fn add_tty(&self, pid: u32, ppid: u32, comm: &str, cwd: Option<&str>, tty: u32) -> &Proc {
             let dir = self.root.join(pid.to_string());
             std::fs::create_dir_all(&dir).expect("pid dir");
             std::fs::write(
                 dir.join("stat"),
-                format!("{pid} ({comm}) S {ppid} {pid} {pid} 0"),
+                format!("{pid} ({comm}) S {ppid} {pid} {pid} {tty} 0"),
             )
             .expect("stat");
             std::fs::write(dir.join("comm"), format!("{comm}\n")).expect("comm");
@@ -204,6 +251,33 @@ mod tests {
         let proc = Proc::new();
         proc.add(900, 1, "ghostty", None)
             .add(920, 900, "opencode.exe", Some("/w/site"));
+        let s = session(Tool::OpenCode, "/w/site");
+        assert_eq!(
+            plan(&s, false, &proc.root, &[900]),
+            JumpPlan::FocusWindow(900)
+        );
+    }
+
+    #[test]
+    fn daemon_without_a_terminal_is_not_an_agent() {
+        let proc = Proc::new();
+        proc.add(900, 1, "ghostty", None)
+            .add(920, 900, "codex", Some("/w/api"))
+            .add_daemon(930, 1, "codex", Some("/w/api"))
+            .add_daemon(931, 1, "opencode.exe", Some("/w/api"));
+        let s = session(Tool::Codex, "/w/api");
+        assert_eq!(
+            plan(&s, false, &proc.root, &[900]),
+            JumpPlan::FocusWindow(900)
+        );
+    }
+
+    #[test]
+    fn wrapper_and_its_child_count_once() {
+        let proc = Proc::new();
+        proc.add(900, 1, "ghostty", None)
+            .add(920, 900, "opencode", Some("/w/site"))
+            .add(921, 920, "opencode.exe", Some("/w/site"));
         let s = session(Tool::OpenCode, "/w/site");
         assert_eq!(
             plan(&s, false, &proc.root, &[900]),

@@ -41,6 +41,9 @@ pub struct Discovery {
     pub claude_sessions: Option<(PathBuf, PathBuf)>,
     /// OpenCode's database, when OpenCode sessions should be listed.
     pub opencode: Option<OpenCodeDb>,
+    /// OpenCode's last good answer, used while its database fails (locked,
+    /// mid-migration) so its lanes do not vanish for a poll.
+    last_opencode: RefCell<Vec<Session>>,
     codex_index: RefCell<RolloutIndex>,
     /// Claude project folders that held an active transcript at the last
     /// full scan, and when that scan ran.
@@ -59,6 +62,7 @@ impl Discovery {
             full_scan_every: Duration::from_secs(15),
             claude_sessions: None,
             opencode: None,
+            last_opencode: RefCell::new(Vec::new()),
             codex_index: RefCell::new(RolloutIndex::default()),
             active_dirs: RefCell::new((None, Vec::new())),
             claude_cwd: RefCell::new(HashMap::new()),
@@ -118,9 +122,14 @@ impl Discovery {
         }
         // OpenCode keeps no transcript file; its sessions come from its
         // database. A database error leaves them out (`check` reports it).
-        if let Some(db) = &self.opencode
-            && let Ok(sessions) = db.sessions(now, self.active_within)
-        {
+        if let Some(db) = &self.opencode {
+            let sessions = match db.sessions(now, self.active_within) {
+                Ok(sessions) => {
+                    *self.last_opencode.borrow_mut() = sessions.clone();
+                    sessions
+                }
+                Err(_) => self.last_opencode.borrow().clone(),
+            };
             found.extend(sessions.into_iter().map(|session| (now, session)));
         }
         // Stable order: oldest first, so new agents join at the end.
@@ -469,6 +478,27 @@ mod tests {
             .map(|s| s.id)
             .collect();
         assert_eq!(ids, ["deck", "opencode:ses_a"]);
+    }
+
+    #[test]
+    fn opencode_error_keeps_its_last_sessions() {
+        use crate::sources::opencode::{OpenCodeDb, tests as oc};
+        let home = tempfile::tempdir().expect("home");
+        let path = home.path().join("opencode.db");
+        let conn = oc::create(&path);
+        let now = SystemTime::now();
+        oc::add_session(&conn, "ses_a", None, "/w/site", oc::ms(now) - 1_000, true);
+        let mut discovery = discovery(home.path());
+        discovery.opencode = Some(OpenCodeDb::new(path));
+        assert_eq!(discovery.list_at(now).len(), 1);
+        // A broken moment: the table is gone (a lock behaves the same way).
+        conn.execute_batch("DROP TABLE session_v2;").expect("drop");
+        let ids: Vec<String> = discovery.list_at(now).into_iter().map(|s| s.id).collect();
+        assert_eq!(
+            ids,
+            ["opencode:ses_a"],
+            "same lane while the database fails"
+        );
     }
 
     #[test]

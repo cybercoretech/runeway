@@ -68,12 +68,14 @@ impl ListView {
 }
 
 /// Draw the whole screen into `area`.
+/// `footer_note` (a jump notice, or "paused") replaces the key hints.
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     world: &World,
     view: &ListView,
     source_error: Option<&str>,
+    footer_note: Option<&str>,
 ) {
     let [title, body, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -151,7 +153,11 @@ pub fn render(
     } else {
         "↑↓ select · ⏎ jump · l world · ? help · q quit".to_string()
     };
-    frame.render_widget(Paragraph::new(keys).style(Style::new().fg(MUTED)), footer);
+    let footer_line = match footer_note {
+        Some(note) => Paragraph::new(note.to_string()).style(Style::new().fg(GOLD)),
+        None => Paragraph::new(keys).style(Style::new().fg(MUTED)),
+    };
+    frame.render_widget(footer_line, footer);
 
     if view.show_help {
         render_help(frame, area);
@@ -271,7 +277,7 @@ mod tests {
     fn screen(world: &World, view: &ListView, error: Option<&str>) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).expect("terminal");
         terminal
-            .draw(|frame| render(frame, frame.area(), world, view, error))
+            .draw(|frame| render(frame, frame.area(), world, view, error, None))
             .expect("draw");
         let buffer = terminal.backend().buffer().clone();
         (0..buffer.area.height)

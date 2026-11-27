@@ -163,7 +163,12 @@ impl WorldView {
         source_error: Option<&str>,
     ) {
         if self.mode == ViewMode::List {
-            view::render(frame, area, world, view, source_error);
+            let note = match (&self.notice, self.paused) {
+                (Some((text, _)), _) => Some(text.as_str()),
+                (None, true) => Some("paused · p resume"),
+                (None, false) => None,
+            };
+            view::render(frame, area, world, view, source_error, note);
             return;
         }
         let notice_rows = u16::from(source_error.is_some());
@@ -652,6 +657,21 @@ mod tests {
     #[test]
     fn paused_footer_says_paused() {
         let mut wv = WorldView::new(false);
+        wv.toggle_pause();
+        let (lines, _) = screen(100, 30, &world(), &mut wv, &ListView::default());
+        assert!(lines[29].contains("paused"), "{}", lines[29]);
+    }
+
+    #[test]
+    fn list_view_shows_notices_and_pause() {
+        let mut wv = WorldView::new(false);
+        wv.toggle();
+        wv.set_notice("not inside tmux · attach with: tmux attach -t x".into());
+        let (lines, _) = screen(100, 30, &world(), &mut wv, &ListView::default());
+        assert!(lines[29].contains("tmux attach -t x"), "{}", lines[29]);
+        for _ in 0..NOTICE_TICKS {
+            wv.tick();
+        }
         wv.toggle_pause();
         let (lines, _) = screen(100, 30, &world(), &mut wv, &ListView::default());
         assert!(lines[29].contains("paused"), "{}", lines[29]);
