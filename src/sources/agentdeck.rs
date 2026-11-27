@@ -21,6 +21,12 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// Anything that can list the current agent sessions.
 pub trait SessionLister {
     fn list(&self) -> Result<Vec<Session>>;
+
+    /// A source that failed during the last successful `list`, when the
+    /// lister could still answer from its other sources.
+    fn last_error(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Stands in when agent-deck cannot be used; every listing fails with the reason.
@@ -122,6 +128,7 @@ pub fn parse_sessions(json: &str) -> Result<Vec<Session>> {
             id: session.id,
             title: session.title,
             path: session.path,
+            transcript: None,
         })
         .collect())
 }

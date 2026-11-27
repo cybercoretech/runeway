@@ -66,6 +66,14 @@ impl RolloutIndex {
         found
     }
 
+    /// The working directory recorded in `path`'s first line (cached).
+    pub fn cwd_of(&mut self, path: &Path) -> Option<PathBuf> {
+        self.cwd_by_path
+            .entry(path.to_path_buf())
+            .or_insert_with(|| rollout_cwd(path))
+            .clone()
+    }
+
     /// How many rollouts have been indexed.
     pub fn len(&self) -> usize {
         self.cwd_by_path.len()
@@ -78,7 +86,7 @@ impl RolloutIndex {
 }
 
 /// `YYYY/MM/DD` folders, newest first, at most `RECENT_DAYS`.
-fn recent_day_dirs(root: &Path) -> Vec<PathBuf> {
+pub(crate) fn recent_day_dirs(root: &Path) -> Vec<PathBuf> {
     let children = |dir: &Path| -> Vec<PathBuf> {
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
             .into_iter()

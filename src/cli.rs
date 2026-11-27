@@ -26,6 +26,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_agent_deck: bool,
 
+    /// Do not show Claude and Codex agents running outside agent-deck.
+    #[arg(long, global = true)]
+    pub no_discover: bool,
+
     /// The agent-deck program [default: agent-deck found on PATH].
     #[arg(long, global = true, value_name = "PATH")]
     pub agent_deck: Option<PathBuf>,

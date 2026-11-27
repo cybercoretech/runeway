@@ -22,6 +22,9 @@ pub struct Config {
     /// How long a followed transcript must stay quiet before a lane switches
     /// to a newer one (Claude starts a new file after `/clear`).
     pub switch_after: Duration,
+    /// Agents outside agent-deck are shown while their transcript was
+    /// written within this.
+    pub discover_within: Duration,
 }
 
 impl Config {
@@ -35,6 +38,7 @@ impl Config {
             claude_context_window: 200_000,
             backfill_bytes: 256 * 1024,
             switch_after: Duration::from_secs(30),
+            discover_within: Duration::from_secs(10 * 60),
         }
     }
 }

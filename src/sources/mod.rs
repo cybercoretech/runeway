@@ -3,4 +3,5 @@
 pub mod agentdeck;
 pub mod claude;
 pub mod codex;
+pub mod discover;
 pub mod tail;

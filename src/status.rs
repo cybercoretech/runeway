@@ -133,6 +133,7 @@ mod tests {
             tool,
             status,
             tmux_session: None,
+            transcript: None,
         };
         world.apply(Event::Session(session(
             "app",
