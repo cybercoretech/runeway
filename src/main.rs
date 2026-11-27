@@ -145,6 +145,8 @@ fn run_check(config: &Config, lister: &dyn SessionLister) -> ExitCode {
             config.opencode_db.display(),
             count
         ),
+        // The file is there but could not be read: an error, not missing.
+        Err(reason) if config.opencode_db.is_file() => println!("opencode    error: {reason}"),
         Err(reason) => println!("opencode    missing: {reason}"),
     }
     if report.agent_deck.is_ok() {
