@@ -26,11 +26,17 @@ fn db_error(err: rusqlite::Error) -> Error {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenCodeDb {
     pub path: PathBuf,
+    /// A session OpenCode marks busy counts as running only if it was
+    /// updated this recently (a crash leaves the busy mark behind).
+    pub running_within: Duration,
 }
 
 impl OpenCodeDb {
     pub fn new(path: PathBuf) -> OpenCodeDb {
-        OpenCodeDb { path }
+        OpenCodeDb {
+            path,
+            running_within: Duration::from_secs(60),
+        }
     }
 
     /// Top-level, unarchived sessions updated within `active_within`.
@@ -44,8 +50,9 @@ impl OpenCodeDb {
         );
         let mut query = conn
             .prepare(
-                "SELECT id, directory, time_busy, time_idle FROM session_v2
-                 WHERE parent_id IS NULL AND time_archived IS NULL AND time_updated >= ?1
+                "SELECT id, directory, time_busy, time_idle, time_updated FROM session_v2
+                 WHERE parent_id IS NULL AND time_archived IS NULL AND time_suspended IS NULL
+                   AND time_updated >= ?1
                  ORDER BY time_updated, id",
             )
             .map_err(db_error)?;
@@ -56,17 +63,20 @@ impl OpenCodeDb {
                     row.get::<_, String>(1)?,
                     row.get::<_, Option<i64>>(2)?,
                     row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, i64>(4)?,
                 ))
             })
             .map_err(db_error)?;
         let mut sessions = Vec::new();
         for row in rows {
-            let (id, directory, busy, idle) = row.map_err(db_error)?;
+            let (id, directory, busy, idle, updated) = row.map_err(db_error)?;
             let path = PathBuf::from(&directory);
             let title = path.file_name().map_or(directory.clone(), |name| {
                 name.to_string_lossy().into_owned()
             });
-            let running = busy.unwrap_or(0) > idle.unwrap_or(0);
+            let recent = millis(now).saturating_sub(updated)
+                <= i64::try_from(self.running_within.as_millis()).unwrap_or(i64::MAX);
+            let running = busy.unwrap_or(0) > idle.unwrap_or(0) && recent;
             sessions.push(Session {
                 id: format!("opencode:{id}"),
                 title,
@@ -88,9 +98,40 @@ impl OpenCodeDb {
     /// The session's current activity (from its newest assistant message)
     /// and its token total.
     pub fn latest(&self, session_id: &str) -> Result<Option<(ActivityKind, String, u64)>> {
-        let Some(conn) = self.open()? else {
+        match self.reader()? {
+            Some(reader) => reader.latest(session_id),
+            None => Ok(None),
+        }
+    }
+
+    /// One read-only connection for several `latest` calls (one poll).
+    pub fn reader(&self) -> Result<Option<Reader>> {
+        Ok(self.open()?.map(|conn| Reader { conn }))
+    }
+
+    /// A read-only connection, or `None` when OpenCode is not installed.
+    fn open(&self) -> Result<Option<Connection>> {
+        if !self.path.is_file() {
             return Ok(None);
-        };
+        }
+        let conn = Connection::open_with_flags(
+            &self.path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(db_error)?;
+        conn.busy_timeout(BUSY_TIMEOUT).map_err(db_error)?;
+        Ok(Some(conn))
+    }
+}
+
+/// An open, read-only view of OpenCode's database.
+pub struct Reader {
+    conn: Connection,
+}
+
+impl Reader {
+    pub fn latest(&self, session_id: &str) -> Result<Option<(ActivityKind, String, u64)>> {
+        let conn = &self.conn;
         let tokens: Option<i64> = conn
             .query_row(
                 "SELECT tokens_input + tokens_output + tokens_reasoning FROM session_v2 WHERE id = ?1",
@@ -116,20 +157,6 @@ impl OpenCodeDb {
             .and_then(|message| last_tool(&message))
             .unwrap_or((ActivityKind::Thinking, String::new()));
         Ok(Some((kind, label, u64::try_from(tokens).unwrap_or(0))))
-    }
-
-    /// A read-only connection, or `None` when OpenCode is not installed.
-    fn open(&self) -> Result<Option<Connection>> {
-        if !self.path.is_file() {
-            return Ok(None);
-        }
-        let conn = Connection::open_with_flags(
-            &self.path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(db_error)?;
-        conn.busy_timeout(BUSY_TIMEOUT).map_err(db_error)?;
-        Ok(Some(conn))
     }
 }
 
@@ -294,6 +321,57 @@ pub(crate) mod tests {
             .map(|s| s.id)
             .collect();
         assert_eq!(ids, ["opencode:ses_1"]);
+    }
+
+    #[test]
+    fn suspended_session_is_skipped() {
+        let (_d, db, conn) = db();
+        let now = SystemTime::now();
+        add_session(&conn, "ses_1", None, "/w/a", ms(now) - 5_000, true);
+        conn.execute("UPDATE session_v2 SET time_suspended = 1", [])
+            .expect("suspend");
+        assert!(db.sessions(now, WINDOW).expect("s").is_empty());
+    }
+
+    #[test]
+    fn busy_but_quiet_session_is_idle() {
+        // Marked busy, but nothing written for 5 minutes (OpenCode crashed).
+        let (_d, db, conn) = db();
+        let now = SystemTime::now();
+        add_session(&conn, "ses_1", None, "/w/a", ms(now) - 300_000, true);
+        assert_eq!(
+            db.sessions(now, WINDOW).expect("s")[0].status,
+            SessionStatus::Idle
+        );
+    }
+
+    #[test]
+    fn one_reader_answers_several_sessions() {
+        let (_d, db, conn) = db();
+        let now = ms(SystemTime::now());
+        add_session(&conn, "ses_1", None, "/w/a", now, true);
+        add_session(&conn, "ses_2", None, "/w/b", now, true);
+        add_tool(
+            &conn,
+            "ses_1",
+            1,
+            "edit",
+            "running",
+            r#"{"filePath":"/w/a/x.rs"}"#,
+        );
+        add_tool(
+            &conn,
+            "ses_2",
+            2,
+            "read",
+            "completed",
+            r#"{"filePath":"/w/b/y.rs"}"#,
+        );
+        let reader = db.reader().expect("open").expect("exists");
+        let one = reader.latest("ses_1").expect("one").expect("some");
+        let two = reader.latest("ses_2").expect("two").expect("some");
+        assert_eq!((one.0, one.1.as_str()), (ActivityKind::Editing, "x.rs"));
+        assert_eq!((two.0, two.1.as_str()), (ActivityKind::Reading, "y.rs"));
     }
 
     #[test]

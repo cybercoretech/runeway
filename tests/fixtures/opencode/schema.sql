@@ -7,6 +7,7 @@ CREATE TABLE session_v2 (
   time_busy integer,
   time_idle integer,
   time_archived integer,
+  time_suspended integer,
   tokens_input integer DEFAULT 0 NOT NULL,
   tokens_output integer DEFAULT 0 NOT NULL,
   tokens_reasoning integer DEFAULT 0 NOT NULL
