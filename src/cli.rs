@@ -14,7 +14,7 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// Use one pixel per cell and fewer colors (for SSH). Used from phase 2.
+    /// Use one pixel per cell (for SSH and slow terminals).
     #[arg(long, global = true)]
     pub lowres: bool,
 

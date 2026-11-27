@@ -3,6 +3,7 @@
 mod app;
 mod cli;
 mod view;
+mod world_view;
 
 use std::{
     env,
@@ -76,7 +77,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
     match command {
         Command::Watch => {
-            app::run(Collector::new(config), lister)?;
+            app::run(Collector::new(config), lister, cli.lowres)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Status { json: false } => {

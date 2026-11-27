@@ -17,29 +17,38 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 use runeway::{collector::Collector, model::World, sources::agentdeck::SessionLister};
 
-use crate::view::{Action, ListView, render};
+use crate::{
+    view::{Action, ListView},
+    world_view::WorldView,
+};
 
 /// How often the source thread polls agent-deck and the transcripts.
 const POLL: Duration = Duration::from_secs(1);
-/// How long the loop waits for a key before checking for new snapshots.
-const INPUT_WAIT: Duration = Duration::from_millis(100);
+/// How long the loop waits for a key before the next animation frame
+/// (30 frames per second; Task 7 paces this properly).
+const INPUT_WAIT: Duration = Duration::from_millis(33);
 
 /// What the source thread sends: the latest world and any source error.
 type Snapshot = (World, Option<String>);
 
 /// Run the live view until the user quits.
-pub fn run(collector: Collector, lister: Box<dyn SessionLister + Send>) -> Result<()> {
+pub fn run(
+    collector: Collector,
+    lister: Box<dyn SessionLister + Send>,
+    lowres: bool,
+) -> Result<()> {
     install_panic_hook(restore_terminal);
     let _guard = TerminalGuard::enter()?;
     let mut terminal =
         Terminal::new(CrosstermBackend::new(io::stdout())).context("starting the terminal")?;
     let snapshots = spawn_sources(collector, lister);
-    event_loop(&mut terminal, &snapshots)
+    event_loop(&mut terminal, &snapshots, WorldView::new(lowres))
 }
 
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     snapshots: &Receiver<Snapshot>,
+    mut world_view: WorldView,
 ) -> Result<()> {
     let mut view = ListView::default();
     let mut world = World::default();
@@ -51,6 +60,7 @@ fn event_loop(
                 Ok((next, error)) => {
                     world = next;
                     source_error = error;
+                    world_view.sync(&world);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -60,15 +70,21 @@ fn event_loop(
             }
         }
         view.selected = view.selected.min(world.lanes.len().saturating_sub(1));
+        world_view.tick();
         terminal
-            .draw(|frame| render(frame, frame.area(), &world, &view, source_error.as_deref()))
+            .draw(|frame| {
+                world_view.render(frame, frame.area(), &world, &view, source_error.as_deref());
+            })
             .context("drawing")?;
         if event::poll(INPUT_WAIT).context("reading input")?
             && let TermEvent::Key(key) = event::read().context("reading input")?
             && key.kind == KeyEventKind::Press
-            && view.handle_key(key, world.lanes.len()) == Action::Quit
         {
-            return Ok(());
+            match view.handle_key(key, world.lanes.len()) {
+                Action::Quit => return Ok(()),
+                Action::ToggleView => world_view.toggle(),
+                Action::None => {}
+            }
         }
     }
 }
