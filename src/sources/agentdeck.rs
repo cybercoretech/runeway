@@ -140,6 +140,7 @@ pub fn parse_sessions(json: &str) -> Result<Vec<Session>> {
             title: session.title,
             path: session.path,
             transcript: None,
+            pid: None,
         })
         .collect())
 }

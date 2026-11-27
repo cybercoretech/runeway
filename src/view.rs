@@ -25,6 +25,10 @@ pub enum Action {
     Quit,
     /// Switch between the world and the list.
     ToggleView,
+    /// Go to the selected agent.
+    Jump,
+    /// Stop or restart the animation.
+    TogglePause,
 }
 
 /// View state for the list.
@@ -48,6 +52,8 @@ impl ListView {
             KeyCode::Esc | KeyCode::Char('q') => return Action::Quit,
             KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('l') => return Action::ToggleView,
+            KeyCode::Enter if lanes > 0 => return Action::Jump,
+            KeyCode::Char('p') => return Action::TogglePause,
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected = (self.selected + 1).min(lanes.saturating_sub(1));
@@ -62,12 +68,14 @@ impl ListView {
 }
 
 /// Draw the whole screen into `area`.
+/// `footer_note` (a jump notice, or "paused") replaces the key hints.
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     world: &World,
     view: &ListView,
     source_error: Option<&str>,
+    footer_note: Option<&str>,
 ) {
     let [title, body, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -141,11 +149,15 @@ pub fn render(
     frame.render_widget(table, body);
 
     let keys = if hidden > 0 {
-        format!("↑↓ select · +{hidden} more · l world · ? help · q quit")
+        format!("↑↓ select · +{hidden} more · ⏎ jump · l world · ? help · q quit")
     } else {
-        "↑↓ select · l world · ? help · q quit".to_string()
+        "↑↓ select · ⏎ jump · l world · ? help · q quit".to_string()
     };
-    frame.render_widget(Paragraph::new(keys).style(Style::new().fg(MUTED)), footer);
+    let footer_line = match footer_note {
+        Some(note) => Paragraph::new(note.to_string()).style(Style::new().fg(GOLD)),
+        None => Paragraph::new(keys).style(Style::new().fg(MUTED)),
+    };
+    frame.render_widget(footer_line, footer);
 
     if view.show_help {
         render_help(frame, area);
@@ -196,15 +208,20 @@ fn scroll_window(total: usize, visible: usize, selected: usize) -> (usize, usize
 pub fn render_help(frame: &mut Frame, area: Rect) {
     let lines = [
         "↑ ↓  or  k j   select an agent",
+        "Enter          go to the agent",
+        "p              pause or resume",
         "l              world or list view",
         "?              show or hide this help",
         "q  Esc  Ctrl-C quit",
     ];
+    // Below the top bar and the notice line, so neither is hidden.
+    const KEEP_TOP: u16 = 2;
     let width = 40.min(area.width);
-    let height = (lines.len() as u16 + 2).min(area.height);
+    let room = area.height.saturating_sub(KEEP_TOP);
+    let height = (lines.len() as u16 + 2).min(room);
     let popup = Rect {
         x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
+        y: area.y + KEEP_TOP + (room - height) / 2,
         width,
         height,
     };
@@ -237,6 +254,7 @@ mod tests {
             status,
             tmux_session: None,
             transcript: None,
+            pid: None,
         };
         world.apply(Event::Session(session(
             "app",
@@ -259,7 +277,7 @@ mod tests {
     fn screen(world: &World, view: &ListView, error: Option<&str>) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).expect("terminal");
         terminal
-            .draw(|frame| render(frame, frame.area(), world, view, error))
+            .draw(|frame| render(frame, frame.area(), world, view, error, None))
             .expect("draw");
         let buffer = terminal.backend().buffer().clone();
         (0..buffer.area.height)
@@ -296,6 +314,22 @@ mod tests {
         assert_eq!(view.selected, 1);
         view.handle_key(key(KeyCode::Down), 0);
         assert_eq!(view.selected, 0);
+    }
+
+    #[test]
+    fn p_toggles_pause() {
+        let mut view = ListView::default();
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('p')), 2),
+            Action::TogglePause
+        );
+    }
+
+    #[test]
+    fn enter_returns_jump_action() {
+        let mut view = ListView::default();
+        assert_eq!(view.handle_key(key(KeyCode::Enter), 2), Action::Jump);
+        assert_eq!(view.handle_key(key(KeyCode::Enter), 0), Action::None);
     }
 
     #[test]
@@ -336,6 +370,7 @@ mod tests {
                 status: SessionStatus::Running,
                 tmux_session: None,
                 transcript: None,
+                pid: None,
             }));
         }
         let top = screen(&world, &ListView::default(), None);

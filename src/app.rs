@@ -2,6 +2,7 @@
 
 use std::{
     io::{self, Stdout},
+    path::PathBuf,
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
     time::{Duration, Instant},
@@ -15,9 +16,10 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
-use runeway::{collector::Collector, demo, model::World, sources::agentdeck::SessionLister};
+use runeway::{collector::Collector, demo, jump, model::World, sources::agentdeck::SessionLister};
 
 use crate::{
+    jumper,
     view::{Action, ListView},
     world_view::WorldView,
 };
@@ -31,11 +33,13 @@ const IDLE_FRAME: Duration = Duration::from_millis(125);
 type Snapshot = (World, Option<String>);
 
 /// How the live view looks and paces itself.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Options {
     pub lowres: bool,
     /// Frames per second while animating (already clamped).
     pub fps: u16,
+    /// Where process information lives, for jumping to an agent.
+    pub proc_root: PathBuf,
 }
 
 /// Where the world comes from: the collector thread, or the demo script.
@@ -185,6 +189,19 @@ fn event_loop(
                     match view.handle_key(key, world.lanes.len()) {
                         Action::Quit => return Ok(()),
                         Action::ToggleView => world_view.toggle(),
+                        Action::Jump => {
+                            if let Some(lane) = world.lanes.get(view.selected) {
+                                let in_tmux = std::env::var_os("TMUX").is_some();
+                                let plan = jump::plan(
+                                    &lane.session,
+                                    in_tmux,
+                                    &options.proc_root,
+                                    &jumper::window_pids(),
+                                );
+                                world_view.set_notice(jumper::run(&plan));
+                            }
+                        }
+                        Action::TogglePause => world_view.toggle_pause(),
                         Action::None => {}
                     }
                 }

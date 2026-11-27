@@ -139,6 +139,7 @@ mod tests {
             status,
             tmux_session: None,
             transcript: None,
+            pid: None,
         };
         world.apply(Event::Session(session(
             "app",

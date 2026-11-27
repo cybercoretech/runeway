@@ -2,6 +2,7 @@
 
 mod app;
 mod cli;
+mod jumper;
 mod view;
 mod world_view;
 
@@ -19,6 +20,7 @@ use runeway::{
     sources::{
         agentdeck::{AgentDeck, NoSessions, SessionLister, Unavailable},
         discover::{Combined, Discovery},
+        opencode::OpenCodeDb,
     },
     status,
 };
@@ -46,6 +48,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
     if let Some(dir) = cli.codex_dir.clone() {
         config.codex_sessions = dir;
     }
+    if let Some(path) = cli.opencode_db.clone() {
+        config.opencode_db = path;
+    }
     if !cli.no_agent_deck {
         config.agent_deck = cli
             .agent_deck
@@ -71,11 +76,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let lister: Box<dyn SessionLister + Send> = if cli.no_discover {
         deck
     } else {
-        let discovery = Discovery::new(
+        let mut discovery = Discovery::new(
             config.claude_projects.clone(),
             config.codex_sessions.clone(),
             config.discover_within,
         );
+        discovery.claude_sessions =
+            Some((config.claude_sessions.clone(), config.proc_root.clone()));
+        discovery.opencode = Some(OpenCodeDb::new(config.opencode_db.clone()));
         Box::new(Combined::new(deck, discovery))
     };
 
@@ -84,6 +92,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let options = app::Options {
                 lowres: cli.lowres,
                 fps: cli::frame_rate(cli.fps),
+                proc_root: config.proc_root.clone(),
             };
             if cli.demo {
                 app::run_demo(options)?;
@@ -130,6 +139,14 @@ fn run_check(config: &Config, lister: &dyn SessionLister) -> ExitCode {
     }
     dir_line("claude", report.claude_dir, &config.claude_projects);
     dir_line("codex", report.codex_dir, &config.codex_sessions);
+    match &report.opencode {
+        Ok(count) => println!(
+            "opencode    ok  {} ({} active)",
+            config.opencode_db.display(),
+            count
+        ),
+        Err(reason) => println!("opencode    missing: {reason}"),
+    }
     if report.agent_deck.is_ok() {
         ExitCode::SUCCESS
     } else {

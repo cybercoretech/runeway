@@ -15,7 +15,9 @@ pub fn world_at(tick: u64) -> World {
     let t = tick % LOOP_TICKS;
     let s = t / TICKS_PER_SECOND;
     let mut world = World::default();
-    for (id, title, tool, script) in AGENTS {
+    for (n, (id, title, tool, script)) in AGENTS.iter().enumerate() {
+        // Each agent works at its own pace, so the HUDs differ.
+        let pace = [5, 3, 7, 4][n];
         let (status, kind, detail) = script(s);
         world.apply(Event::Session(Session {
             id: id.to_string(),
@@ -25,6 +27,7 @@ pub fn world_at(tick: u64) -> World {
             status,
             tmux_session: None,
             transcript: None,
+            pid: None,
         }));
         world.apply(Event::Activity {
             id: id.to_string(),
@@ -34,8 +37,8 @@ pub fn world_at(tick: u64) -> World {
         world.apply(Event::Usage {
             id: id.to_string(),
             // Per second, not per tick, so the world only changes once a second.
-            tokens_total: 2_000 + s * 270,
-            context_used: Some(0.1 + 0.7 * s as f32 / 60.0),
+            tokens_total: 1_500 * pace + s * 60 * pace,
+            context_used: Some(0.05 * pace as f32 + 0.5 * s as f32 / 60.0),
         });
     }
     world

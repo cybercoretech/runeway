@@ -42,6 +42,10 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "DIR")]
     pub claude_dir: Option<PathBuf>,
 
+    /// OpenCode's database [default: ~/.local/share/opencode/opencode.db].
+    #[arg(long, global = true, value_name = "PATH")]
+    pub opencode_db: Option<PathBuf>,
+
     /// Codex's sessions folder [default: ~/.codex/sessions].
     #[arg(long, global = true, value_name = "DIR")]
     pub codex_dir: Option<PathBuf>,

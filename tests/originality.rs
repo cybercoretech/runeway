@@ -32,28 +32,73 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-#[test]
-fn no_borrowed_game_names() {
+/// Every file the scan reads: Rust under `src/` and `examples/`, and
+/// `README.md`.
+fn scanned_files() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("examples"), &mut files);
     files.push(root.join("README.md"));
-    let mut hits = Vec::new();
-    for file in &files {
-        let text = std::fs::read_to_string(file).expect("read file");
+    files
+}
+
+/// The forbidden names in one line.
+fn hits(line: &str) -> Vec<&'static str> {
+    let lower = line.to_lowercase();
+    FORBIDDEN
+        .iter()
+        .copied()
+        .filter(|name| {
+            if name.starts_with(|c: char| c.is_ascii_digit()) {
+                // "1-1" or "1up" only as a word of its own, so dates such as
+                // 2021-11-05 do not count.
+                lower
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                    .any(|word| word == *name)
+            } else {
+                lower.contains(name)
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn no_borrowed_game_names() {
+    let mut found = Vec::new();
+    for file in scanned_files() {
+        let text = std::fs::read_to_string(&file).expect("read file");
         for (number, line) in text.lines().enumerate() {
-            let lower = line.to_lowercase();
-            for name in FORBIDDEN {
-                if lower.contains(name) {
-                    hits.push(format!("{}:{}: {name}", file.display(), number + 1));
-                }
+            for name in hits(line) {
+                found.push(format!("{}:{}: {name}", file.display(), number + 1));
             }
         }
     }
     assert!(
-        hits.is_empty(),
+        found.is_empty(),
         "borrowed names found:\n{}",
-        hits.join("\n")
+        found.join("\n")
+    );
+}
+
+#[test]
+fn matcher_ignores_dates_but_flags_level_names() {
+    assert!(
+        hits("released 2021-11-05").is_empty(),
+        "{:?}",
+        hits("2021-11-05")
+    );
+    assert_eq!(hits("level 1-1 begins"), ["1-1"]);
+    assert_eq!(hits("A Goomba walks"), ["goomba"]);
+}
+
+#[test]
+fn examples_are_scanned() {
+    assert!(
+        scanned_files()
+            .iter()
+            .any(|f| f.ends_with("examples/sprite_sheet.rs")),
+        "examples/ not scanned"
     );
 }
 
