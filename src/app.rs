@@ -202,6 +202,7 @@ fn event_loop(
                                     in_tmux,
                                     &options.proc_root,
                                     &windows,
+                                    std::process::id(),
                                 );
                                 world_view.set_notice(jumper::run(&plan));
                             }
