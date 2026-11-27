@@ -149,6 +149,10 @@ impl LaneSim {
     /// switches the runner's state and spawns its effects; a status change
     /// alone only switches the state.
     pub fn sync(&mut self, lane: &LaneState) {
+        // Anything new on the lane (tokens included) means the agent is busy.
+        if lane.last_change != self.last_activity_change {
+            self.quiet = 0;
+        }
         self.last_activity_change = lane.last_change;
         let activity = (lane.activity, lane.detail.clone());
         let status = &lane.session.status;
@@ -210,9 +214,10 @@ impl LaneSim {
     pub fn tick(&mut self) {
         self.ticks = self.ticks.wrapping_add(1);
         self.quiet = self.quiet.saturating_add(1);
+        // A command can run for minutes; its end arrives as an event.
         let moving = matches!(
             self.runner.state,
-            RunnerState::Running | RunnerState::Collecting | RunnerState::MachineSection
+            RunnerState::Running | RunnerState::Collecting
         );
         if moving && self.quiet > IDLE_AFTER_TICKS {
             self.runner.set_state(RunnerState::Idle);
@@ -707,6 +712,27 @@ mod tests {
         active.last_change += 5;
         sim.sync(&active);
         assert_eq!(sim.runner.state, RunnerState::Smashing);
+    }
+
+    #[test]
+    fn new_usage_keeps_a_busy_runner_on_its_feet() {
+        let mut sim = LaneSim::new(&running(ActivityKind::Thinking, ""));
+        let mut lane = running(ActivityKind::Thinking, "");
+        for step in 1..=4 {
+            ticks(&mut sim, IDLE_AFTER_TICKS / 2);
+            // Same activity, but the lane changed (tokens streamed in).
+            lane.last_change += 1;
+            sim.sync(&lane);
+            assert_eq!(sim.runner.state, RunnerState::Running, "step {step}");
+        }
+    }
+
+    #[test]
+    fn a_long_command_stays_in_the_machine_section() {
+        let mut sim = LaneSim::new(&running(ActivityKind::Thinking, ""));
+        sim.sync(&running(ActivityKind::RunningCommand, "cargo"));
+        ticks(&mut sim, IDLE_AFTER_TICKS * 4);
+        assert_eq!(sim.runner.state, RunnerState::MachineSection);
     }
 
     #[test]

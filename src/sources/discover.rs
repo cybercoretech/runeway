@@ -171,6 +171,9 @@ pub struct Combined {
     pub primary: Box<dyn SessionLister + Send>,
     pub discovery: Discovery,
     last_error: RefCell<Option<String>>,
+    /// agent-deck's last good answer, used while it fails so its lanes do
+    /// not vanish for a poll.
+    last_good: RefCell<Vec<Session>>,
 }
 
 impl Combined {
@@ -179,6 +182,7 @@ impl Combined {
             primary,
             discovery,
             last_error: RefCell::new(None),
+            last_good: RefCell::new(Vec::new()),
         }
     }
 }
@@ -186,8 +190,11 @@ impl Combined {
 impl SessionLister for Combined {
     fn list(&self) -> Result<Vec<Session>> {
         let (mut sessions, error) = match self.primary.list() {
-            Ok(sessions) => (sessions, None),
-            Err(err) => (Vec::new(), Some(err.to_string())),
+            Ok(sessions) => {
+                *self.last_good.borrow_mut() = sessions.clone();
+                (sessions, None)
+            }
+            Err(err) => (self.last_good.borrow().clone(), Some(err.to_string())),
         };
         *self.last_error.borrow_mut() = error;
         let discovered: Vec<Session> = self
@@ -354,6 +361,51 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         let error = combined.last_error().expect("error kept");
         assert!(error.contains("not found"), "{error}");
+    }
+
+    /// Lists `ok`, or fails while the shared flag is set.
+    struct Flaky {
+        ok: Vec<Session>,
+        fail: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl SessionLister for Flaky {
+        fn list(&self) -> Result<Vec<Session>> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                Err(crate::Error::AgentDeck("timed out".into()))
+            } else {
+                Ok(self.ok.clone())
+            }
+        }
+    }
+
+    #[test]
+    fn agent_deck_failing_once_keeps_its_last_sessions() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let home = tempfile::tempdir().expect("home");
+        write(
+            &home.path().join(".claude/projects/-w-app/one.jsonl"),
+            "{}\n",
+            5,
+        );
+        let fail = Arc::new(AtomicBool::new(false));
+        let flaky = Flaky {
+            ok: vec![deck_session("a", Tool::Claude, "/w/app")],
+            fail: Arc::clone(&fail),
+        };
+        let combined = Combined::new(Box::new(flaky), discovery(home.path()));
+        let ids = |c: &Combined| -> Vec<String> {
+            c.list().expect("list").into_iter().map(|s| s.id).collect()
+        };
+        assert_eq!(ids(&combined), ["a"]);
+        fail.store(true, Ordering::SeqCst);
+        assert_eq!(ids(&combined), ["a"], "same lane while agent-deck fails");
+        assert!(combined.last_error().expect("error").contains("timed out"));
+        fail.store(false, Ordering::SeqCst);
+        assert_eq!(ids(&combined), ["a"]);
+        assert_eq!(combined.last_error(), None);
     }
 
     #[test]

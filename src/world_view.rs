@@ -55,7 +55,7 @@ pub struct WorldView {
 struct Layout {
     full: Vec<usize>,
     compact: Vec<usize>,
-    /// Lanes not drawn in full.
+    /// Lanes not on screen at all.
     more: usize,
 }
 
@@ -74,11 +74,12 @@ fn layout(n: usize, rows: u16, selected: usize) -> Layout {
     let full: Vec<usize> = (start..start + k).collect();
     let space = rows.saturating_sub(k * lane);
     let rest: Vec<usize> = (0..n).filter(|i| !full.contains(i)).collect();
-    let compact = rest.into_iter().take(space).collect();
+    let compact: Vec<usize> = rest.into_iter().take(space).collect();
+    let more = n - k - compact.len();
     Layout {
         full,
         compact,
-        more: n - k,
+        more,
     }
 }
 
@@ -503,7 +504,8 @@ mod tests {
                 "agent{i:02} missing:\n{text}"
             );
         }
-        assert!(lines[39].contains("+4 more"), "{text}");
+        // Everyone is on screen (two in full, four as lines): nothing is hidden.
+        assert!(!lines[39].contains("more"), "{text}");
         // The selected agent is one of the full lanes (its HUD is followed by pixels).
         let row = lines
             .iter()
@@ -525,7 +527,8 @@ mod tests {
             &mut WorldView::new(false),
             &ListView::default(),
         );
-        assert!(lines[29].contains("more"), "{}", lines[29]);
+        // 28 body rows: 1 full lane (12) + 16 lines; 183 not shown at all.
+        assert!(lines[29].contains("+183 more"), "{}", lines[29]);
     }
 
     #[test]
