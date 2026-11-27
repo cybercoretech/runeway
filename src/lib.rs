@@ -6,5 +6,6 @@ pub mod error;
 pub mod model;
 pub mod sources;
 pub mod status;
+pub mod world;
 
 pub use error::{Error, Result};
