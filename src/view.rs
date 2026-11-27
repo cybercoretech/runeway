@@ -27,6 +27,8 @@ pub enum Action {
     ToggleView,
     /// Go to the selected agent.
     Jump,
+    /// Stop or restart the animation.
+    TogglePause,
 }
 
 /// View state for the list.
@@ -51,6 +53,7 @@ impl ListView {
             KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('l') => return Action::ToggleView,
             KeyCode::Enter if lanes > 0 => return Action::Jump,
+            KeyCode::Char('p') => return Action::TogglePause,
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected = (self.selected + 1).min(lanes.saturating_sub(1));
@@ -200,6 +203,7 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
     let lines = [
         "↑ ↓  or  k j   select an agent",
         "Enter          go to the agent",
+        "p              pause or resume",
         "l              world or list view",
         "?              show or hide this help",
         "q  Esc  Ctrl-C quit",
@@ -304,6 +308,15 @@ mod tests {
         assert_eq!(view.selected, 1);
         view.handle_key(key(KeyCode::Down), 0);
         assert_eq!(view.selected, 0);
+    }
+
+    #[test]
+    fn p_toggles_pause() {
+        let mut view = ListView::default();
+        assert_eq!(
+            view.handle_key(key(KeyCode::Char('p')), 2),
+            Action::TogglePause
+        );
     }
 
     #[test]

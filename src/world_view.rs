@@ -52,6 +52,8 @@ pub struct WorldView {
     pub lowres: bool,
     /// A short message for the footer and the ticks it has left.
     notice: Option<(String, u32)>,
+    /// Animation stopped with `p`; notices still count down.
+    pub paused: bool,
 }
 
 /// Which lanes are drawn in full and which as one compact line.
@@ -94,12 +96,17 @@ impl WorldView {
             mode: ViewMode::World,
             lowres,
             notice: None,
+            paused: false,
         }
     }
 
     /// Show `text` in the footer for a few seconds.
     pub fn set_notice(&mut self, text: String) {
         self.notice = Some((text, NOTICE_TICKS));
+    }
+
+    pub fn toggle_pause(&mut self) {
+        self.paused = !self.paused;
     }
 
     pub fn toggle(&mut self) {
@@ -126,7 +133,9 @@ impl WorldView {
 
     /// True while any lane on the world view moves (drawn at full rate).
     pub fn animating(&self) -> bool {
-        self.mode == ViewMode::World && self.sims.values().any(LaneSim::is_animating)
+        !self.paused
+            && self.mode == ViewMode::World
+            && self.sims.values().any(LaneSim::is_animating)
     }
 
     /// Advance every lane one animation tick.
@@ -136,6 +145,9 @@ impl WorldView {
             if *left == 0 {
                 self.notice = None;
             }
+        }
+        if self.paused {
+            return;
         }
         for sim in self.sims.values_mut() {
             sim.tick();
@@ -207,8 +219,12 @@ impl WorldView {
         };
         let footer = match &self.notice {
             Some((text, _)) => Paragraph::new(text.clone()).style(Style::new().fg(WAITING)),
+            None if self.paused => Paragraph::new(format!(
+                "paused · p resume · {more}⏎ jump · l list · ? help · q quit"
+            ))
+            .style(Style::new().fg(WAITING)),
             None => Paragraph::new(format!(
-                "↑↓ select · {more}⏎ jump · l list · ? help · q quit"
+                "↑↓ select · {more}⏎ jump · p pause · l list · ? help · q quit"
             ))
             .style(Style::new().fg(MUTED)),
         };
@@ -598,6 +614,47 @@ mod tests {
         );
         wv.toggle();
         assert_eq!(wv.mode, ViewMode::World);
+    }
+
+    fn scroll_of(wv: &WorldView, id: &str) -> i64 {
+        wv.sims.get(id).expect("sim").scroll
+    }
+
+    #[test]
+    fn paused_world_does_not_tick() {
+        let world = world();
+        let mut wv = WorldView::new(false);
+        wv.sync(&world);
+        wv.toggle_pause();
+        let before = scroll_of(&wv, "app");
+        for _ in 0..30 {
+            wv.tick();
+        }
+        assert_eq!(scroll_of(&wv, "app"), before);
+        assert!(!wv.animating(), "nothing to draw at full rate while paused");
+    }
+
+    #[test]
+    fn unpause_skips_missed_ticks() {
+        let world = world();
+        let mut wv = WorldView::new(false);
+        wv.sync(&world);
+        wv.toggle_pause();
+        let before = scroll_of(&wv, "app");
+        for _ in 0..100 {
+            wv.tick();
+        }
+        wv.toggle_pause();
+        wv.tick();
+        assert_eq!(scroll_of(&wv, "app"), before + 1, "one tick, not a burst");
+    }
+
+    #[test]
+    fn paused_footer_says_paused() {
+        let mut wv = WorldView::new(false);
+        wv.toggle_pause();
+        let (lines, _) = screen(100, 30, &world(), &mut wv, &ListView::default());
+        assert!(lines[29].contains("paused"), "{}", lines[29]);
     }
 
     #[test]

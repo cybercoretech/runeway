@@ -201,6 +201,7 @@ fn event_loop(
                                 world_view.set_notice(jumper::run(&plan));
                             }
                         }
+                        Action::TogglePause => world_view.toggle_pause(),
                         Action::None => {}
                     }
                 }
