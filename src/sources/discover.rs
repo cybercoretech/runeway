@@ -3,9 +3,14 @@
 
 use std::{
     cell::RefCell,
+    collections::HashMap,
+    fs::File,
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
+
+use serde_json::Value;
 
 use crate::{
     Result,
@@ -26,7 +31,15 @@ pub struct Discovery {
     pub active_within: Duration,
     /// Transcripts written within this are `Running`, older ones `Idle`.
     pub running_within: Duration,
+    /// How often every Claude project folder is listed; between full scans
+    /// only folders that recently held an active transcript are read.
+    pub full_scan_every: Duration,
     codex_index: RefCell<RolloutIndex>,
+    /// Claude project folders that held an active transcript at the last
+    /// full scan, and when that scan ran.
+    active_dirs: RefCell<(Option<SystemTime>, Vec<PathBuf>)>,
+    /// Each Claude transcript's working directory, once found.
+    claude_cwd: RefCell<HashMap<PathBuf, PathBuf>>,
 }
 
 impl Discovery {
@@ -36,32 +49,36 @@ impl Discovery {
             codex_sessions,
             active_within,
             running_within: Duration::from_secs(60),
+            full_scan_every: Duration::from_secs(15),
             codex_index: RefCell::new(RolloutIndex::default()),
+            active_dirs: RefCell::new((None, Vec::new())),
+            claude_cwd: RefCell::new(HashMap::new()),
         }
     }
 
     /// Sessions for transcripts modified within `active_within` of `now`.
     pub fn list_at(&self, now: SystemTime) -> Vec<Session> {
         let mut found: Vec<(SystemTime, Session)> = Vec::new();
-        let claude_dirs = std::fs::read_dir(&self.claude_projects)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.path());
-        for dir in claude_dirs {
+        for dir in self.claude_dirs(now) {
             let slug = dir
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
             for (modified, file) in self.recent_jsonl(&dir, now, |_| true) {
-                let title = slug
-                    .rsplit('-')
-                    .find(|part| !part.is_empty())
-                    .unwrap_or("claude")
-                    .to_string();
+                let (title, path) = match self.claude_cwd_of(&file) {
+                    Some(cwd) => (folder_name(&cwd), cwd),
+                    // No cwd yet: the slug's last part is the best guess.
+                    None => (
+                        slug.rsplit('-')
+                            .find(|part| !part.is_empty())
+                            .unwrap_or("claude")
+                            .to_string(),
+                        PathBuf::new(),
+                    ),
+                };
                 found.push((
                     modified,
-                    self.session(Tool::Claude, &file, modified, now, title, PathBuf::new()),
+                    self.session(Tool::Claude, &file, modified, now, title, path),
                 ));
             }
         }
@@ -71,8 +88,7 @@ impl Discovery {
                 let cwd = self.codex_index.borrow_mut().cwd_of(&file);
                 let title = cwd
                     .as_deref()
-                    .and_then(Path::file_name)
-                    .map(|name| name.to_string_lossy().into_owned())
+                    .map(folder_name)
                     .unwrap_or_else(|| "codex".to_string());
                 let path = cwd.unwrap_or_default();
                 found.push((
@@ -84,6 +100,42 @@ impl Discovery {
         // Stable order: oldest first, so new agents join at the end.
         found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
         found.into_iter().map(|(_, session)| session).collect()
+    }
+
+    /// The Claude project folders to read this poll: all of them on a full
+    /// scan (every `full_scan_every`), otherwise only those that held an
+    /// active transcript at the last full scan.
+    fn claude_dirs(&self, now: SystemTime) -> Vec<PathBuf> {
+        let mut state = self.active_dirs.borrow_mut();
+        let due = match state.0 {
+            Some(last) => now
+                .duration_since(last)
+                .map_or(true, |since| since >= self.full_scan_every),
+            None => true,
+        };
+        if due {
+            let active: Vec<PathBuf> = std::fs::read_dir(&self.claude_projects)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|dir| !self.recent_jsonl(dir, now, |_| true).is_empty())
+                .collect();
+            *state = (Some(now), active);
+        }
+        state.1.clone()
+    }
+
+    /// The working directory a Claude transcript records, cached once found.
+    fn claude_cwd_of(&self, file: &Path) -> Option<PathBuf> {
+        if let Some(cwd) = self.claude_cwd.borrow().get(file) {
+            return Some(cwd.clone());
+        }
+        let cwd = transcript_cwd(file)?;
+        self.claude_cwd
+            .borrow_mut()
+            .insert(file.to_path_buf(), cwd.clone());
+        Some(cwd)
     }
 
     /// `.jsonl` files directly in `dir` modified within `active_within`.
@@ -140,6 +192,25 @@ impl Discovery {
             transcript: Some(file.to_path_buf()),
         }
     }
+}
+
+/// The last component of `path`, for a lane title.
+fn folder_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+/// The first `cwd` field in a Claude transcript's opening lines (Claude
+/// writes it on every message; the first few lines are bookkeeping).
+fn transcript_cwd(file: &Path) -> Option<PathBuf> {
+    const SEARCH_BYTES: u64 = 64 * 1024;
+    let reader = BufReader::new(File::open(file).ok()?.take(SEARCH_BYTES));
+    reader
+        .lines()
+        .map_while(std::result::Result::ok)
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .find_map(|value| value.get("cwd")?.as_str().map(PathBuf::from))
 }
 
 /// True when an agent-deck session already follows `found`'s transcript:
@@ -279,6 +350,47 @@ mod tests {
         assert_eq!(s.title, "app");
         assert_eq!(s.status, SessionStatus::Running);
         assert_eq!(s.transcript.as_deref(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn claude_title_and_path_come_from_the_transcript_cwd() {
+        let home = tempfile::tempdir().expect("home");
+        let file = home.path().join(".claude/projects/-w-my-app/abc.jsonl");
+        write(
+            &file,
+            "{\"type\":\"mode\"}\n{\"type\":\"user\",\"cwd\":\"/w/my-app\"}\n",
+            5,
+        );
+        let sessions = discovery(home.path()).list_at(SystemTime::now());
+        assert_eq!(sessions[0].title, "my-app");
+        assert_eq!(sessions[0].path, Path::new("/w/my-app"));
+    }
+
+    #[test]
+    fn new_transcript_in_an_active_folder_shows_at_once() {
+        let home = tempfile::tempdir().expect("home");
+        let dir = home.path().join(".claude/projects/-w-app");
+        write(&dir.join("one.jsonl"), "{}\n", 5);
+        let discovery = discovery(home.path());
+        let now = SystemTime::now();
+        assert_eq!(discovery.list_at(now).len(), 1);
+        write(&dir.join("two.jsonl"), "{}\n", 0);
+        assert_eq!(discovery.list_at(now + Duration::from_secs(1)).len(), 2);
+    }
+
+    #[test]
+    fn new_project_folder_is_found_on_the_next_full_scan() {
+        let home = tempfile::tempdir().expect("home");
+        let projects = home.path().join(".claude/projects");
+        write(&projects.join("-w-app/one.jsonl"), "{}\n", 5);
+        let discovery = discovery(home.path());
+        let now = SystemTime::now();
+        assert_eq!(discovery.list_at(now).len(), 1);
+        write(&projects.join("-w-new/two.jsonl"), "{}\n", 0);
+        // Between full scans only folders already known to be active are read.
+        assert_eq!(discovery.list_at(now + Duration::from_secs(1)).len(), 1);
+        let later = now + discovery.full_scan_every + Duration::from_secs(1);
+        assert_eq!(discovery.list_at(later).len(), 2);
     }
 
     #[test]

@@ -145,3 +145,41 @@ fn no_discover_leaves_them_out() {
     );
     assert_eq!(stdout(&output).lines().last(), Some("3 agents, 1 waiting"));
 }
+
+/// Run `runeway status` with no agent-deck on PATH and none given.
+fn status_without_agent_deck_on_path(extra: &[&str]) -> String {
+    let home = tempfile::tempdir().expect("home");
+    let empty_path = home.path().join("bin");
+    std::fs::create_dir_all(&empty_path).expect("bin dir");
+    let output = Command::new(env!("CARGO_BIN_EXE_runeway"))
+        .arg("status")
+        .args(extra)
+        .arg("--claude-dir")
+        .arg(home.path().join("claude"))
+        .arg("--codex-dir")
+        .arg(home.path().join("codex"))
+        .env("HOME", home.path())
+        .env("PATH", &empty_path)
+        .output()
+        .expect("run runeway");
+    assert!(output.status.success(), "{output:?}");
+    stdout(&output)
+}
+
+#[test]
+fn turning_agent_deck_off_shows_no_notice() {
+    let text = status_without_agent_deck_on_path(&["--no-agent-deck"]);
+    assert!(!text.contains("agent-deck unavailable"), "{text}");
+}
+
+#[test]
+fn agent_deck_not_installed_is_quiet_while_discovering() {
+    let text = status_without_agent_deck_on_path(&[]);
+    assert!(!text.contains("agent-deck unavailable"), "{text}");
+}
+
+#[test]
+fn agent_deck_not_installed_without_discovery_still_explains() {
+    let text = status_without_agent_deck_on_path(&["--no-discover"]);
+    assert!(text.starts_with("agent-deck unavailable:"), "{text}");
+}

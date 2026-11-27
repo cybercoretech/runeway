@@ -102,7 +102,7 @@ Example `runeway status`:
 
 Override any of them with `--agent-deck PATH`, `--claude-dir DIR` and `--codex-dir DIR`, or skip agent-deck with `--no-agent-deck`. Agents without a readable transcript still appear, using agent-deck's status alone.
 
-🔭 **Agents outside agent-deck.** Any Claude Code or Codex transcript written to in the last 10 minutes gets a lane too, named after its project folder. It runs while the file grew in the last minute, sits after that, and leaves when the file has been quiet for 10 minutes. A session agent-deck already lists is not shown twice. Turn this off with `--no-discover`.
+🔭 **Agents outside agent-deck.** Any Claude Code or Codex transcript written to in the last 10 minutes gets a lane too, named after its project folder. It runs while the file grew in the last minute, sits after that, and leaves when the file has been quiet for 10 minutes. A session agent-deck already lists is not shown twice. Turn this off with `--no-discover`. Without agent-deck installed (or with `--no-agent-deck`), Runeway just shows the agents it discovers, with no warning; `runeway check` still tells you agent-deck is missing.
 
 ## 🔒 Privacy
 
