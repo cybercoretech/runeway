@@ -162,8 +162,8 @@ Sources run on a background thread and only send events over a channel; drawing 
 One PR at a time, each merged before the next:
 
 1. **Telemetry + list view.** agent-deck source, Claude and Codex parsers, the event model and a plain ratatui list (one row per agent: tool, action, tokens, context %, waiting flag). Useful on its own.
-2. **Platformer renderer.** Half-block renderer, lanes, the original cast and tiles, HUD, frame pacing, `--lowres`.
-3. **Full mapping + polish.** All states animated, sub-agent companions, tmux jump, OpenCode via SQLite, process fallback, help overlay, README with screenshots.
+2. **Platformer renderer.** Half-block renderer, lanes, the original cast and tiles, HUD, frame pacing, `--lowres`. Moved forward from phase 3 at the owner's request (2026-11-27), because most of the owner's agents run outside agent-deck: discovery of Claude and Codex sessions that are actively writing a transcript, and a `--demo` mode that plays scripted lanes. CI (GitHub Actions running fmt, clippy, tests).
+3. **Full mapping + polish.** Sub-agent companions, tmux jump, OpenCode via SQLite, process fallback, README with screenshots.
 
 ## Testing
 
