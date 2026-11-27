@@ -14,12 +14,26 @@ const MAX_DEPTH: usize = 64;
 pub enum JumpPlan {
     /// `tmux switch-client -t <name>` (Runeway runs inside tmux).
     TmuxSwitch(String),
-    /// Outside tmux: the command to attach yourself.
+    /// Outside tmux: the session to attach to yourself.
     TmuxAttachHint(String),
     /// Focus the window owned by this process.
     FocusWindow(u32),
+    /// The agent runs in the same window as Runeway (another tab): a window
+    /// manager cannot switch tabs, so say where it is instead.
+    SameWindow { title: String, tty: Option<String> },
     /// Why there is nowhere to go.
     NotFound(String),
+}
+
+/// `pts/N` for a `stat` tty number, or `None` when there is no terminal.
+pub fn tty_name(tty_nr: u32) -> Option<String> {
+    // Linux device numbers: major in bits 8-19, minor in bits 0-7 and 20-31.
+    let major = (tty_nr >> 8) & 0xfff;
+    let minor = (tty_nr & 0xff) | ((tty_nr >> 12) & 0xfff00);
+    // Pseudo-terminal slaves use majors 136-143.
+    (136..=143)
+        .contains(&major)
+        .then(|| format!("pts/{}", (major - 136) * 256 + minor))
 }
 
 /// Whether planning a jump to `session` needs the window list (asking the
@@ -30,12 +44,19 @@ pub fn needs_windows(session: &Session) -> bool {
 
 /// The plan for `session`. `window_pids` are the processes that own a
 /// window (empty when no window manager can be asked).
-pub fn plan(session: &Session, in_tmux: bool, proc_root: &Path, window_pids: &[u32]) -> JumpPlan {
+/// `own_pid` is Runeway's own process, to notice an agent in the same window.
+pub fn plan(
+    session: &Session,
+    in_tmux: bool,
+    proc_root: &Path,
+    window_pids: &[u32],
+    own_pid: u32,
+) -> JumpPlan {
     if let Some(name) = &session.tmux_session {
         return if in_tmux {
             JumpPlan::TmuxSwitch(name.clone())
         } else {
-            JumpPlan::TmuxAttachHint(format!("tmux attach -t {name}"))
+            JumpPlan::TmuxAttachHint(name.clone())
         };
     }
     let pid = match session.pid {
@@ -61,17 +82,33 @@ pub fn plan(session: &Session, in_tmux: bool, proc_root: &Path, window_pids: &[u
             }
         }
     };
+    match window_of(proc_root, pid, window_pids) {
+        // The agent's window is the one Runeway runs in: it is in another
+        // tab, which no window manager can switch to.
+        Some(window) if window_of(proc_root, own_pid, window_pids) == Some(window) => {
+            JumpPlan::SameWindow {
+                title: session.title.clone(),
+                tty: tty(proc_root, pid).and_then(tty_name),
+            }
+        }
+        Some(window) => JumpPlan::FocusWindow(window),
+        None => not_found(session),
+    }
+}
+
+/// The first of `pid` and its ancestors that owns a window.
+fn window_of(proc_root: &Path, pid: u32, window_pids: &[u32]) -> Option<u32> {
     let mut current = pid;
     for _ in 0..MAX_DEPTH {
         if window_pids.contains(&current) {
-            return JumpPlan::FocusWindow(current);
+            return Some(current);
         }
         match parent(proc_root, current) {
             Some(next) if next > 1 && next != current => current = next,
-            _ => break,
+            _ => return None,
         }
     }
-    not_found(session)
+    None
 }
 
 fn not_found(session: &Session) -> JumpPlan {
@@ -222,7 +259,7 @@ mod tests {
         s.tmux_session = Some("deck_a".into());
         let proc = Proc::new();
         assert_eq!(
-            plan(&s, true, &proc.root, &[]),
+            plan(&s, true, &proc.root, &[], 1),
             JumpPlan::TmuxSwitch("deck_a".into())
         );
     }
@@ -233,8 +270,8 @@ mod tests {
         s.tmux_session = Some("deck_a".into());
         let proc = Proc::new();
         assert_eq!(
-            plan(&s, false, &proc.root, &[]),
-            JumpPlan::TmuxAttachHint("tmux attach -t deck_a".into())
+            plan(&s, false, &proc.root, &[], 1),
+            JumpPlan::TmuxAttachHint("deck_a".into())
         );
     }
 
@@ -247,7 +284,7 @@ mod tests {
         let mut s = session(Tool::Claude, "/home/u");
         s.pid = Some(920);
         assert_eq!(
-            plan(&s, false, &proc.root, &[500, 900]),
+            plan(&s, false, &proc.root, &[500, 900], 1),
             JumpPlan::FocusWindow(900)
         );
     }
@@ -261,7 +298,7 @@ mod tests {
             .add(940, 900, "claude", Some("/w/api"));
         let s = session(Tool::Codex, "/w/api");
         assert_eq!(
-            plan(&s, false, &proc.root, &[900]),
+            plan(&s, false, &proc.root, &[900], 1),
             JumpPlan::FocusWindow(900)
         );
     }
@@ -273,7 +310,7 @@ mod tests {
             .add(920, 900, "opencode.exe", Some("/w/site"));
         let s = session(Tool::OpenCode, "/w/site");
         assert_eq!(
-            plan(&s, false, &proc.root, &[900]),
+            plan(&s, false, &proc.root, &[900], 1),
             JumpPlan::FocusWindow(900)
         );
     }
@@ -287,7 +324,7 @@ mod tests {
             .add_daemon(931, 1, "opencode.exe", Some("/w/api"));
         let s = session(Tool::Codex, "/w/api");
         assert_eq!(
-            plan(&s, false, &proc.root, &[900]),
+            plan(&s, false, &proc.root, &[900], 1),
             JumpPlan::FocusWindow(900)
         );
     }
@@ -300,7 +337,7 @@ mod tests {
             .add(921, 920, "opencode.exe", Some("/w/site"));
         let s = session(Tool::OpenCode, "/w/site");
         assert_eq!(
-            plan(&s, false, &proc.root, &[900]),
+            plan(&s, false, &proc.root, &[900], 1),
             JumpPlan::FocusWindow(900)
         );
     }
@@ -322,11 +359,58 @@ mod tests {
         for path in [link.display().to_string(), format!("{}/", real.display())] {
             let s = session(Tool::Codex, &path);
             assert_eq!(
-                plan(&s, false, &proc.root, &[900]),
+                plan(&s, false, &proc.root, &[900], 1),
                 JumpPlan::FocusWindow(900),
                 "{path}"
             );
         }
+    }
+
+    #[test]
+    fn agent_in_another_tab_of_our_window_is_same_window() {
+        let proc = Proc::new();
+        proc.add(900, 1, "ghostty", None)
+            .add_tty(910, 900, "zsh", None, 34820)
+            .add_tty(920, 910, "claude", Some("/home/u"), 34820)
+            .add_tty(940, 900, "zsh", None, 34832)
+            .add_tty(950, 940, "runeway", Some("/home/u"), 34832);
+        let mut s = session(Tool::Claude, "/home/u");
+        s.pid = Some(920);
+        assert_eq!(
+            plan(&s, false, &proc.root, &[900], 950),
+            JumpPlan::SameWindow {
+                title: "app".into(),
+                tty: Some("pts/4".into())
+            }
+        );
+    }
+
+    #[test]
+    fn agent_in_its_own_window_still_focuses() {
+        let proc = Proc::new();
+        proc.add(900, 1, "ghostty", None)
+            .add(920, 900, "claude", Some("/home/u"))
+            .add(800, 1, "ghostty", None)
+            .add(950, 800, "runeway", Some("/home/u"));
+        let mut s = session(Tool::Claude, "/home/u");
+        s.pid = Some(920);
+        assert_eq!(
+            plan(&s, false, &proc.root, &[800, 900], 950),
+            JumpPlan::FocusWindow(900)
+        );
+    }
+
+    #[test]
+    fn tty_names_follow_linux_numbering() {
+        assert_eq!(tty_name((136 << 8) | 4).as_deref(), Some("pts/4"));
+        assert_eq!(tty_name((137 << 8) | 44).as_deref(), Some("pts/300"));
+        assert_eq!(
+            tty_name(44 | (136 << 8) | (256 << 12)).as_deref(),
+            Some("pts/300"),
+            "large minor numbers on one major"
+        );
+        assert_eq!(tty_name(0), None);
+        assert_eq!(tty_name((4 << 8) | 1), None, "not a pseudo-terminal");
     }
 
     #[test]
@@ -336,7 +420,7 @@ mod tests {
             .add(920, 900, "codex", Some("/w/api"))
             .add(921, 900, "codex", Some("/w/api"));
         let s = session(Tool::Codex, "/w/api");
-        match plan(&s, false, &proc.root, &[900]) {
+        match plan(&s, false, &proc.root, &[900], 1) {
             JumpPlan::NotFound(why) => assert!(why.contains("2 codex agents"), "{why}"),
             other => panic!("guessed: {other:?}"),
         }
@@ -348,7 +432,7 @@ mod tests {
         proc.add(920, 1, "claude", Some("/w"));
         let mut s = session(Tool::Claude, "/w");
         s.pid = Some(920);
-        match plan(&s, false, &proc.root, &[900]) {
+        match plan(&s, false, &proc.root, &[900], 1) {
             JumpPlan::NotFound(why) => assert!(why.contains("no window"), "{why}"),
             other => panic!("{other:?}"),
         }
@@ -361,12 +445,12 @@ mod tests {
         let mut s = session(Tool::Claude, "/w");
         s.pid = Some(920);
         assert!(matches!(
-            plan(&s, false, &proc.root, &[900]),
+            plan(&s, false, &proc.root, &[900], 1),
             JumpPlan::NotFound(_)
         ));
         s.pid = Some(12345); // no such process
         assert!(matches!(
-            plan(&s, false, &proc.root, &[900]),
+            plan(&s, false, &proc.root, &[900], 1),
             JumpPlan::NotFound(_)
         ));
     }
@@ -379,7 +463,7 @@ mod tests {
         let mut s = session(Tool::Claude, "/w");
         s.pid = Some(920);
         assert_eq!(
-            plan(&s, false, &proc.root, &[900]),
+            plan(&s, false, &proc.root, &[900], 1),
             JumpPlan::FocusWindow(900)
         );
     }

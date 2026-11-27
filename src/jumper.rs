@@ -41,13 +41,26 @@ pub fn window_pids() -> Vec<u32> {
 
 /// Do what `plan` says; the notice to show.
 pub fn run(plan: &JumpPlan) -> String {
+    if let JumpPlan::TmuxSwitch(name) | JumpPlan::TmuxAttachHint(name) = plan
+        && let Some(notice) = tmux_notice(name, tmux_session_alive(name))
+    {
+        return notice;
+    }
     match plan {
         JumpPlan::TmuxSwitch(name) => command(
             "tmux",
             &tmux_switch_args(name),
             format!("switched to tmux session {name}"),
         ),
-        JumpPlan::TmuxAttachHint(hint) => format!("not inside tmux · attach with: {hint}"),
+        JumpPlan::TmuxAttachHint(name) => {
+            format!("not inside tmux · attach with: tmux attach -t {name}")
+        }
+        JumpPlan::SameWindow { title, tty } => {
+            let place = tty.as_deref().unwrap_or("another terminal");
+            format!(
+                "{title} is in another tab of this window ({place}); tabs can't be switched from outside, use your tab keys"
+            )
+        }
         JumpPlan::FocusWindow(pid) => focus_window(*pid),
         JumpPlan::NotFound(why) => why.clone(),
     }
@@ -96,6 +109,21 @@ fn command(program: &str, args: &[String], done: String) -> String {
         }
         Err(err) => format!("{program}: {err}"),
     }
+}
+
+/// The notice when the tmux session behind a jump is gone, else `None`.
+fn tmux_notice(name: &str, alive: bool) -> Option<String> {
+    (!alive)
+        .then(|| format!("tmux session {name} isn't running; start the agent again (agent-deck)"))
+}
+
+/// True when tmux has a session named exactly `name`.
+fn tmux_session_alive(name: &str) -> bool {
+    run_with_timeout(
+        Command::new("tmux").args(["has-session", "-t", &format!("={name}")]),
+        TIMEOUT,
+    )
+    .is_ok_and(|output| output.status.success())
 }
 
 /// `tmux switch-client` to exactly `name` (`=` stops prefix matching).
@@ -168,6 +196,27 @@ fn run_with_timeout(command: &mut Command, limit: Duration) -> Result<Output, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_window_says_which_tab() {
+        let message = run(&JumpPlan::SameWindow {
+            title: "glyphsmith".into(),
+            tty: Some("pts/4".into()),
+        });
+        assert!(message.contains("glyphsmith"), "{message}");
+        assert!(message.contains("another tab"), "{message}");
+        assert!(message.contains("pts/4"), "{message}");
+    }
+
+    #[test]
+    fn dead_tmux_session_is_reported() {
+        let dead = tmux_notice("agentdeck_x", false).expect("dead session");
+        assert!(
+            dead.contains("agentdeck_x") && dead.contains("isn't running"),
+            "{dead}"
+        );
+        assert_eq!(tmux_notice("agentdeck_x", true), None);
+    }
 
     #[test]
     fn tmux_target_is_exact() {
