@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "site/index.html"
+        ],
+        "createdAt": "2026-11-27T20:42:58.574Z",
+        "reason": "house rule: cybercore-site-design neon-look.md prescribes low-opacity color-mix() glows from theme variables; owner chose direction A Attract Mode, built on the neon house look (2026-11-27)"
+      }
+    ]
+  }
+}

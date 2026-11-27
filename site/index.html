@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runeway: your coding agents as a retro arcade game</title>
+  <meta name="description" content="Runeway shows every coding agent you run as a lane in a side-scrolling arcade game in your terminal. Read-only, offline, open source.">
+  <meta name="theme-color" content="#0a0818">
+  <meta name="color-scheme" content="dark">
+  <link rel="canonical" href="https://runeway-arcade.pages.dev/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Runeway: every coding agent gets a lane">
+  <meta property="og:description" content="Your Claude Code, Codex, OpenCode and Gemini agents as a retro side-scroller in the terminal.">
+  <meta property="og:url" content="https://runeway-arcade.pages.dev/">
+  <meta property="og:image" content="https://runeway-arcade.pages.dev/assets/social.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="assets/favicon.ico" sizes="any">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Orbitron:wght@600;800&family=Press+Start+2P&family=VT323&display=swap">
+  <link rel="stylesheet" href="https://cybercoretech.github.io/kit/chooser.css">
+  <link rel="stylesheet" href="styles.css?v=1">
+  <script>
+    window.SITE = { siteLabel: 'RUNEWAY' };
+  </script>
+  <style id="cc-mobile-first">
+    @media (max-width: 1024px) {
+      pre, table { max-width: 100%; }
+      img, svg, canvas { max-width: 100%; }
+      :not(pre) > code { overflow-wrap: anywhere; }
+    }
+    @media (pointer: coarse) {
+      .nav a, button { min-height: 44px; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="bar">
+    <a class="wordmark" href="#top" aria-label="Runeway home">RUNEWAY</a>
+    <a class="md-phone" data-cybercore-master-docs href="https://cybercoretech.github.io/cybercore/docs.html">MASTER DOCS ↗</a>
+    <nav class="nav" id="nav" aria-label="Primary">
+      <a href="#watch">watch</a>
+      <a href="#cast">cast</a>
+      <a href="#moves">moves</a>
+      <a href="#controls">controls</a>
+      <a href="#install">install</a>
+      <a data-cybercore-master-docs href="https://cybercoretech.github.io/cybercore/docs.html">MASTER DOCS ↗</a>
+      <a href="https://github.com/cybercoretech/runeway" target="_blank" rel="noopener">GitHub ↗<span class="sr"> (opens in a new tab)</span></a>
+    </nav>
+    <cybercore-theme-chooser compact match=".nav a:not([data-cybercore-master-docs])"></cybercore-theme-chooser>
+    <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Open menu"><span></span><span></span><span></span></button>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-h">
+      <div class="hero-copy">
+        <p class="eyebrow">cybercore / runeway · open source</p>
+        <h1 id="hero-h">EVERY AGENT GETS A LANE.</h1>
+        <p class="lede">Runeway turns the coding agents you run into a side-scrolling arcade in your terminal. See who is reading, who is editing, whose tests just failed, and who is waiting at the gate for you.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="#install"><span class="blink" aria-hidden="true">▶</span> PRESS START</a>
+          <a class="btn btn-ghost" href="#cast">SEE THE CAST</a>
+        </div>
+        <p class="coin"><span class="vt">1 CREDIT =</span> <code>cargo install --git https://github.com/cybercoretech/runeway</code></p>
+      </div>
+
+      <figure class="cabinet" aria-labelledby="attract-cap">
+        <div class="marquee" aria-hidden="true"><span>ATTRACT MODE</span><span class="m-dot"></span><span>4 AGENTS</span></div>
+        <div class="bezel">
+          <div class="screen">
+            <canvas id="attract" width="192" height="120" role="img" aria-label="Four agent lanes playing: a hooded rune-runner collecting coins and breaking bricks, a brass automaton running a command among gears, a hover-drone waiting at a rune gate, and twin spirit orbs editing."></canvas>
+            <div class="hud" id="hud" aria-hidden="true"></div>
+            <div class="scan" aria-hidden="true"></div>
+          </div>
+        </div>
+        <div class="deck">
+          <button class="btn btn-small" type="button" id="pause" aria-pressed="false">❚❚ PAUSE</button>
+          <figcaption id="attract-cap">The <code>runeway --demo</code> cast, drawn in your browser with Runeway's own sprites. In your terminal each lane is a real agent.</figcaption>
+        </div>
+      </figure>
+    </section>
+
+    <section class="section" id="watch" aria-labelledby="watch-h">
+      <header class="section-head">
+        <p class="kicker">LEVEL 1 · WHAT IT WATCHES</p>
+        <h2 id="watch-h">ONE LANE PER AGENT</h2>
+      </header>
+      <div class="watch">
+        <figure class="monitor">
+          <div class="mon-bar"><span>~/Devspace</span><b>runeway</b></div>
+          <img src="assets/world.svg" width="1080" height="936" alt="Runeway in a terminal: four agent lanes, each with a HUD line of name, tool, tokens, context meter and current action, above a pixel-art level. One lane, a hover-drone, has a gold border and stands at a rune gate because its agent is waiting for an answer." loading="lazy">
+          <figcaption>A real frame of the world view (<code>runeway --demo</code>, 120×52 cells).</figcaption>
+        </figure>
+        <div class="watch-copy">
+          <p>Runeway reads what your agents already write down. It never talks to them and never touches the network.</p>
+          <ul class="sources">
+            <li><b>agent-deck</b><span>which sessions exist, and which are waiting for you</span></li>
+            <li><b>Claude Code</b><span>transcripts for tool calls and tokens; session records for live status</span></li>
+            <li><b>Codex</b><span>rollouts for commands, results and the context window</span></li>
+            <li><b>OpenCode</b><span>its database, opened read-only, for tool calls and tokens</span></li>
+            <li><b>Gemini and others</b><span>shown with agent-deck's status</span></li>
+          </ul>
+          <p class="note">Agents you start outside agent-deck appear too, once their transcript has been written in the last 10 minutes.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="cast" aria-labelledby="cast-h">
+      <header class="section-head">
+        <p class="kicker">LEVEL 2 · CHOOSE YOUR AGENT</p>
+        <h2 id="cast-h">THE CAST</h2>
+      </header>
+      <div class="select" role="group" aria-label="Runners" id="roster"></div>
+      <div class="player" id="player" aria-live="polite"></div>
+    </section>
+
+    <section class="section" id="moves" aria-labelledby="moves-h">
+      <header class="section-head">
+        <p class="kicker">LEVEL 3 · MOVE LIST</p>
+        <h2 id="moves-h">WHAT THE RUNNER DOES</h2>
+      </header>
+      <ol class="moves" id="movelist"></ol>
+    </section>
+
+    <section class="section" id="controls" aria-labelledby="controls-h">
+      <header class="section-head">
+        <p class="kicker">LEVEL 4 · CONTROLS</p>
+        <h2 id="controls-h">KEYS AND FLAGS</h2>
+      </header>
+      <div class="controls">
+        <div class="keycard" aria-label="Keys">
+          <p class="card-title">IN THE WORLD VIEW</p>
+          <dl class="keys">
+            <div><dt><kbd>↑</kbd><kbd>↓</kbd> <kbd>k</kbd><kbd>j</kbd></dt><dd>select an agent</dd></div>
+            <div><dt><kbd>Enter</kbd></dt><dd>go to it: its tmux session, or the terminal window running it</dd></div>
+            <div><dt><kbd>p</kbd></dt><dd>pause or resume the animation</dd></div>
+            <div><dt><kbd>l</kbd></dt><dd>switch to the plain list and back</dd></div>
+            <div><dt><kbd>?</kbd></dt><dd>show the keys</dd></div>
+            <div><dt><kbd>q</kbd> <kbd>Esc</kbd> <kbd>Ctrl-C</kbd></dt><dd>quit; your terminal is always restored</dd></div>
+          </dl>
+        </div>
+        <div class="flags">
+          <p class="card-title">FLAGS</p>
+          <dl class="flaglist">
+            <div><dt><code>--demo</code></dt><dd>four scripted agents on a one-minute loop</dd></div>
+            <div><dt><code>--lowres</code></dt><dd>one pixel per cell, for SSH or slow terminals</dd></div>
+            <div><dt><code>--fps N</code></dt><dd>frame rate while something moves, 5 to 60 (default 30)</dd></div>
+            <div><dt><code>--no-discover</code></dt><dd>only agent-deck's sessions</dd></div>
+            <div><dt><code>--no-agent-deck</code></dt><dd>skip agent-deck</dd></div>
+            <div><dt><code>--claude-dir</code> <code>--codex-dir</code> <code>--opencode-db</code></dt><dd>read from somewhere else</dd></div>
+          </dl>
+          <figure class="list-shot">
+            <img src="assets/list.svg" width="1080" height="144" alt="The plain list view: one row per agent with tool, status, what it is doing, tokens and context." loading="lazy">
+            <figcaption>The list view (<kbd>l</kbd>), also printed by <code>runeway status</code>.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="rules" aria-labelledby="rules-h">
+      <header class="section-head">
+        <p class="kicker">LEVEL 5 · RULES OF PLAY</p>
+        <h2 id="rules-h">IT ONLY WATCHES</h2>
+      </header>
+      <ol class="rules">
+        <li><b>READ-ONLY</b><span>Never writes to, copies or deletes agent data or transcripts.</span></li>
+        <li><b>OFFLINE</b><span>Makes no network connections at all.</span></li>
+        <li><b>LABELS ONLY</b><span>Shows a short label like <code>editing lib.rs</code>, never file contents, full commands, prompts or tool output.</span></li>
+        <li><b>RECENT PAST</b><span>Reads at most the last 256 KiB of each transcript when it starts.</span></li>
+      </ol>
+    </section>
+
+    <section class="section" id="install" aria-labelledby="install-h">
+      <header class="section-head">
+        <p class="kicker">INSERT COIN</p>
+        <h2 id="install-h">PLAY IT</h2>
+      </header>
+      <div class="install">
+        <div class="term" role="group" aria-label="Install and run">
+          <div class="term-bar"><span>terminal</span><button class="btn btn-small copy" type="button" data-copy="cargo install --git https://github.com/cybercoretech/runeway">COPY INSTALL</button></div>
+<pre tabindex="0" aria-label="Install and run commands"><code><span class="c"># needs Rust 1.89 or newer</span>
+<span class="p">$</span> cargo install --git https://github.com/cybercoretech/runeway
+<span class="p">$</span> runeway --demo      <span class="c"># try it with scripted agents</span>
+<span class="p">$</span> runeway             <span class="c"># watch your real agents</span>
+<span class="p">$</span> runeway check       <span class="c"># which sources it found</span>
+<span class="p">$</span> runeway status      <span class="c"># one line per agent, then exit</span></code></pre>
+        </div>
+        <div class="status">
+          <p class="card-title">WHAT WORKS TODAY</p>
+          <ul class="ticks">
+            <li>World view, list view, <code>status</code> and <code>check</code></li>
+            <li>Claude Code, Codex and OpenCode activity and tokens</li>
+            <li>Agents outside agent-deck, found automatically</li>
+            <li><kbd>Enter</kbd> jumps to an agent (tmux, or Hyprland windows)</li>
+          </ul>
+          <p class="card-title dim">GOOD TO KNOW</p>
+          <ul class="dashes">
+            <li>Built and tested on Linux; other systems are untested.</li>
+            <li>Needs a true-colour terminal; <code>--lowres</code> helps over SSH.</li>
+            <li>Gemini and other agents show agent-deck's status only.</li>
+            <li>Not on crates.io yet: install from GitHub as above.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="cc-contact-band" aria-label="Contact Cybercore Tech">
+    <cybercore-contact repo="runeway"><a href="mailto:dev@cybercoretech.net">dev@cybercoretech.net</a></cybercore-contact>
+  </section>
+  <footer class="footer">
+    <span>Copyright (c) 2026 Cybercore Tech · MIT licence</span>
+    <a href="https://github.com/cybercoretech/runeway" target="_blank" rel="noopener">source ↗<span class="sr"> (opens in a new tab)</span></a>
+  </footer>
+
+  <script type="module" src="https://cybercoretech.github.io/kit/chooser.js"></script>
+  <script type="module" src="https://cybercoretech.github.io/kit/contact.js"></script>
+  <script type="module" src="site.js?v=1"></script>
+</body>
+</html>

@@ -134,6 +134,8 @@ The tests use hand-written fixtures under `tests/fixtures/`, never real transcri
 ```bash
 cargo run --example sprite_sheet               # every sprite at 4×, for a visual check
 cargo run --example screenshot                 # redraw docs/screenshots/*.svg from the demo
+cargo run --example export_sprites             # site/assets/sprites.json for the website
+python3 site/tools/make_icons.py               # site icons from the sprites
 cargo run --release --example frame_bench      # frame time for 12 lanes at 160×48 (target < 4 ms)
 RUNEWAY_UPDATE_SNAPSHOTS=1 cargo test lane     # rewrite the lane snapshot after a deliberate change
 ```
